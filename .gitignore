@@ -1,0 +1,12 @@
+node_modules/
+dist/
+target/
+.vite/
+web/src/wasm/pkg/
+shots/
+ab/
+reference/*
+!reference/README.md
+*.log
+Thumbs.db
+.DS_Store
