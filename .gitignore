@@ -8,5 +8,6 @@ ab/
 reference/*
 !reference/README.md
 *.log
+web/.dev-pid
 Thumbs.db
 .DS_Store

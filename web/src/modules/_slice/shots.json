@@ -1,0 +1,18 @@
+[
+  { "id": "wide", "cam": "wide", "time": 16.5 },
+  { "id": "close", "cam": "close", "time": 16.5 },
+  { "id": "player", "cam": "player", "time": 16.5 },
+  { "id": "shore", "cam": "shore", "time": 16.5 },
+  { "id": "cliff", "cam": "cliff", "time": 16.5 },
+  { "id": "top", "cam": "top", "time": 12 },
+  { "id": "dawn", "cam": "wide", "time": 5.5 },
+  { "id": "morning", "cam": "wide", "time": 8 },
+  { "id": "noon", "cam": "wide", "time": 12 },
+  { "id": "sunset", "cam": "wide", "time": 18.5 },
+  { "id": "dusk", "cam": "wide", "time": 20 },
+  { "id": "night", "cam": "wide", "time": 23 },
+  { "id": "rain", "cam": "player", "time": 16.5, "weather": "rain:0.9" },
+  { "id": "snow", "cam": "player", "time": 12, "weather": "snow:0.9" },
+  { "id": "fog", "cam": "player", "time": 8, "weather": "fog:0.8" },
+  { "id": "walk_strip", "cam": "close", "time": 16.5, "filmstrip": { "frames": 8, "interval": 120 } }
+]
