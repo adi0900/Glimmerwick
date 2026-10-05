@@ -1,0 +1,20 @@
+[package]
+name = "sim_core"
+description = "Glimmerwick sim plumbing: fixed-step driver, Rng, Input, EventBus, Channels, command/query/save registries, shared components."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bevy_ecs.workspace = true
+bevy_app.workspace = true
+glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+postcard.workspace = true
+libm.workspace = true
+log.workspace = true

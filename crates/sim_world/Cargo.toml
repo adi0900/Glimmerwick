@@ -1,0 +1,17 @@
+[package]
+name = "sim_world"
+description = "Glimmerwick world: seeded island heightfield, biomes, flora scatter, terrain queries."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+sim_core.workspace = true
+bevy_ecs.workspace = true
+bevy_app.workspace = true
+serde.workspace = true
+serde_json.workspace = true

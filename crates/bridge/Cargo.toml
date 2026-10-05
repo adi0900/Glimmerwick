@@ -1,0 +1,33 @@
+[package]
+name = "bridge"
+description = "Glimmerwick Rust <-> JS bridge: wasm-bindgen class `Game` (docs/BRIDGE_API.md) over the assembled simulation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+# cdylib -> the wasm module; rlib -> native tests and benches.
+crate-type = ["cdylib", "rlib"]
+
+# wasm-bindgen's generated glue contains `unsafe`; the sim crates keep `forbid(unsafe_code)`.
+[lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+type_complexity = "allow"
+too_many_arguments = "allow"
+
+[dependencies]
+sim_core.workspace = true
+sim_world.workspace = true
+sim_player.workspace = true
+sim_creatures.workspace = true
+sim_build.workspace = true
+sim_systems.workspace = true
+log.workspace = true
+wasm-bindgen.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

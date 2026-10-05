@@ -1,0 +1,91 @@
+# Glimmerwick simulation workspace (Rust + Bevy ECS, headless, compiled to WASM).
+# Owner: foundation-rust.  Contract: docs/ARCHITECTURE.md §3-4, docs/BRIDGE_API.md.
+#
+# Build the wasm package for the web side with:  powershell -File tools/build-wasm.ps1 [-Release]
+# Native tests:                                  cargo test --workspace
+# Wasm type-check:                               cargo check --target wasm32-unknown-unknown -p bridge
+#
+# (Always dot-source tools/env.ps1 first - Rust lives on E:.)
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/sim_core",
+    "crates/sim_world",
+    "crates/sim_player",
+    "crates/sim_creatures",
+    "crates/sim_build",
+    "crates/sim_systems",
+    "crates/bridge",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+# --- Shared dependencies -----------------------------------------------------------------------
+# Versions are pinned exactly where the ABI matters (bevy_* must be one consistent release;
+# wasm-bindgen crate must match the installed CLI 0.2.129).  Cargo.lock pins everything else.
+#
+# We depend on the two ECS crates directly instead of the `bevy` umbrella crate:
+#  * the umbrella (even with default-features = false) drags in bevy_reflect/transform/input/time/math
+#    -> 2.9 MB wasm vs 1.0 MB for bevy_ecs + bevy_app (measured, wasm-dev, see docs/BRIDGE_API.md);
+#  * bevy_time's TimePlugin calls `Instant::now()` which panics on wasm32-unknown-unknown.
+[workspace.dependencies]
+bevy_ecs = { version = "=0.19.1", default-features = false, features = ["std"] }
+bevy_app = { version = "=0.19.1", default-features = false, features = ["std"] }
+# glam 0.34 (NOT the 0.32 that bevy_math uses - we do not depend on bevy_math).
+# `libm` + `scalar-math` => identical float code paths on native and wasm (bit-for-bit determinism).
+glam = { version = "0.34", default-features = false, features = ["libm", "scalar-math", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+postcard = { version = "1", default-features = false, features = ["use-std"] }
+libm = "0.2"
+log = "0.4"
+wasm-bindgen = "=0.2.129"
+
+# Workspace crates
+sim_core = { path = "crates/sim_core" }
+sim_world = { path = "crates/sim_world" }
+sim_player = { path = "crates/sim_player" }
+sim_creatures = { path = "crates/sim_creatures" }
+sim_build = { path = "crates/sim_build" }
+sim_systems = { path = "crates/sim_systems" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+# Bevy system signatures are naturally wide / type-heavy.
+type_complexity = "allow"
+too_many_arguments = "allow"
+
+# --- Profiles ----------------------------------------------------------------------------------
+# Native dev/test: our crates at opt-level 1, dependencies (Bevy ECS) fully optimised, so the
+# 600-tick determinism tests and 2000-creature benches do not crawl in debug mode.
+[profile.dev]
+opt-level = 1
+[profile.dev.package."*"]
+opt-level = 3
+
+# Final shipping build.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
+
+# Fast-to-build wasm for day-to-day iteration (tools/build-wasm.ps1 default).
+[profile.wasm-dev]
+inherits = "release"
+opt-level = 2
+lto = false
+codegen-units = 16
+incremental = true
+debug = false
+debug-assertions = false
+overflow-checks = false
