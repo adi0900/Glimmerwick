@@ -4,6 +4,8 @@ User feedback (2026-10-06): **"the movements are stiff."** Priority: fix this be
 Process: `docs/CLEANROOM.md` (analysts write specs, a separate implementer builds from the specs only). Specs: `docs/specs/MOVEMENT_SPEC.md` (Minecraft-style player movement, public-behaviour facts only) and `docs/specs/CREATURE_LOCOMOTION_NOTES.md` (concepts studied from the open-source Cobblemon code; no code/assets copied).
 Implementer owns: `crates/sim_player/**` (controller), `web/src/modules/camera/**`, `web/src/modules/player/**` (avatar + procedural animation), and the movement/steering parts of `crates/sim_creatures/**` + a locomotion layer in `web/src/modules/creatures/**` (coordinate with the creatures builder).
 
+**Voxel pivot (2026-10-06):** the world is now a voxel world (ARCHITECTURE §4b). The controller must use **voxel AABB collision** (step-up, ledges, swimming through water voxels) — not the heightfield — and the avatar is a **micro-voxel chibi** whose model comes from the voxel-creatures brief; you drive its animation (part hierarchy + springs). Voxel collision queries come from the voxel-world owner (`is_solid`, `ground_height`, `raycast`, `aabb_sweep`).
+
 ## Orchestrator audit (so you don't start blind)
 The controller already has exponential velocity smoothing (ground 14/s, air 3.5/s, swim 6/s), facing smoothing 14/s, walk 4.2 / sprint 7.0 m/s — so the stiffness is not simple "instant velocity". Likely culprits: the player is a **capsule with no body animation**, camera behaviour is unverified, creatures bob rigidly. **First task: measure** — record per-tick traces (player velocity/yaw/pos, camera pos/fov, creature pos/yaw/speed) from the running game, state the root causes, then change code.
 

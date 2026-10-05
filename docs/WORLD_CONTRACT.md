@@ -2,6 +2,8 @@
 
 Owner of this file: orchestrator. Change requests → `docs/REQUESTS.md`.
 
+> **v2 note (voxel pivot, 2026-10-06):** terrain, cliffs, trees and bushes become **blocks** (see ARCHITECTURE.md §4b). Biome ids below now drive *surface block choice and worldgen rules*. Flora kinds 0-31 (trees/bushes) are placed as block structures by worldgen; kinds ≥ 32 (flowers, mushrooms, rocks, reeds, shells, logs) stay as micro-voxel decor instances. The `flora` channel keeps its layout for decor; tree kinds simply stop appearing in it once voxel trees land.
+
 ## Biome ids (`world.biome`, u8 per cell)
 0 ocean-deep · 1 shallows · 2 sand · 3 meadow · 4 forest-floor · 5 highland-grass · 6 cliff-rock · 7 dirt-path · 8 pond-bank/mud · 9 flower-meadow · 10 village-clearing (packed earth/grass) · 11 snow (seasonal overlay, optional)
 `world.info` JSON must include: `size_x,size_z` (m), `cell` (m), `origin_x,origin_z`, `sea_level`, `chunk` (cells), `spawn:{player:[x,z],village:[x,z]}`, `habitats:{biome→[[x,z,r],…]}`.

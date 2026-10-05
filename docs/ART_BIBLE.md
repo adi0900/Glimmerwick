@@ -1,5 +1,16 @@
 # Art Bible — "sunlit toy diorama"
 
+## 0. DIRECTION CHANGE (2026-10-06, user-approved): **voxel diorama** — this section overrides anything below that conflicts
+Why: generated art reaches a polished look far faster in voxels (clean shapes, rich lighting), it fits the Minecraft-style building pillar, and it is the look the user asked for (voxel-diorama presentation: chunky extruded blocks, soft shadows, tilt-shift, reflective water). **Original assets only**, built from scratch; inspired by the *kind* of look in public voxel-diorama mods — no Pokémon art, code or ROM data (see THIRD_PARTY.md, CLEANROOM.md).
+One line: *a sunlit tabletop diorama built from chunky, softly bevelled toy blocks — saturated palette, warm key light + cool shadows, ambient occlusion in every crease, tilt-shift depth of field, glittering reflective water.*
+- **Scales:** world block = 1 m (terrain, cliffs, houses, paths); half-block (0.5 m) slabs/stairs for detail; **micro-voxels ≈ 1/16 m** for creatures, characters, props, flowers, furniture (a 0.6 m critter ≈ 10–14 voxels long). Player ≈ 1.15 m (chibi, 2.5–3 heads). Island ≈ 300 × 240 m, up to ~48 blocks tall.
+- **Blocks read as toy blocks, not blurry pixel-art:** per-face painted texture (procedural, 32–64 px, hand-painted noise, per-block colour jitter ±6 %), **shader bevel** (soft 4–6 % edge highlight/darkening so every block catches light), smooth per-vertex AO (4-neighbour) + skylight, cool shadows. No flat vertex-colour cubes; crisp texels with mip bias tuned to avoid shimmer.
+- **Terrain:** natural-looking *voxel* landforms — terraced cliffs with overhangs, stepped rounded hills, beaches, sand bars, stream beds, rock arches; grass overhangs block sides; pebbles/flowers/tufts as micro-voxels on top; no 1-block spikes, no staircase noise.
+- **Flora:** trees are *real placed blocks* (choppable): chunky round-leaf oak, tiered pine, blossom, palm, willow, birch, maple, giant glowcap (≥ 6 designs × size variants); leaf blocks have rounded silhouettes + shader wind sway; bushes/flowers/grass tufts as micro-voxel models with GPU wind.
+- **Water:** translucent voxel-aligned volumes; depth gradient, animated surface normals, foam at edges, sky/shore/tree **reflections**, caustics on the bed, ripples; never a flat quad.
+- **Creatures & player:** micro-voxel models (limited palette: 1–2 body colours + accent, glowing emissive marking voxels), part-hierarchy animation (limbs, ears, tail, head) with squash-stretch + springs — they must feel alive, never rigid blocks; big expressive eyes (2–3 voxel highlights).
+- **Camera & post (look module):** tilt-shift DOF with island/player sharp, soft cascaded shadows, AO, bloom on emissives, mild world curvature allowed, optional hue-shifted outlines, grade per time of day. Keep §1 colour, §2 time-of-day, §6 motion, §7 VFX, §8 UI, §9 audio, §11 never-list; §§3-5 (smooth materials/terrain/foliage/sky) apply only where they don't conflict with this section (sky + clouds + atmosphere stay as built).
+
 **North star:** a sunlit toy diorama come to life — soft clay / felt / lacquered-wood materials, warm golden light with
 cool tinted shadows, saturated-but-harmonised colour, gentle miniature-style depth of field, and hand-painted
 micro-detail on every surface. Reads instantly, feels delicious, looks lovingly crafted.

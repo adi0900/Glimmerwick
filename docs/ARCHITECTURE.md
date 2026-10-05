@@ -73,6 +73,12 @@ Core channels (stable names; owners may add more and document them):
 | `flora` | sim_world | f32, stride 8 | kind · x · y · z · yaw · scale · variant · state (static; changes bump `version`) |
 | `props` | sim_build | f32, stride 12 | placed blocks / furniture |
 
+## 4b. Voxel world contract (v2, 2026-10-06, supersedes the heightfield *terrain* model)
+`sim_world` owns a chunked **voxel world** (terrain, cliffs, trees, houses, paths are all blocks). Block registry in `sim_core::blocks` (id `u16`, name, solid/transparent/liquid, light emission, texture slots, hardness, drops). Suggested chunk = 16×16 columns × full height (≤ 64). `HeightQuery` stays (top solid surface) for AI/spawns; the player uses **voxel AABB collision** (MOVEMENT_SPEC.md).
+Channels (owner sim_world; exact layout goes in BRIDGE_API.md): `vox.chunks` (chunk directory + versions), `vox.data` (u16 block ids per chunk) **or** Rust-meshed `vox.mesh.*` buffers — the voxel-world owner picks one and documents it; `vox.dirty` (chunk ids edited since last tick). `world.height` / `world.biome` remain as derived read-only channels until every consumer has migrated.
+Commands `world.set_block|break_block|place_block|fill`; queries `world.block`, `world.raycast`, `world.blocks` (registry for the atlas); event `world.block_changed`. Edits remesh only dirty chunks (< 4 ms each); saves store only edited chunks.
+Ownership additions: `crates/sim_core/src/blocks.rs` + `web/src/modules/voxel/**` (meshing, procedural atlas, bevel/AO shader, water) → **voxel-world**; later `web/src/modules/voxel-flora/**` → voxel-flora; `web/src/modules/creatures/**` → voxel-creatures; `web/src/modules/player/**` + camera → movement. `web/src/modules/world/**` (old smooth terrain/water) is replaced and deleted once the voxel module reaches parity (git history keeps it).
+
 ## 5. Web engine (foundation-web builds it; look owns Materials/Post/Lighting/glsl)
 - Auto-discovery: every `web/src/modules/<name>/index.ts` default-exports a `GameModule` (loaded via `import.meta.glob`, no shared registry file to edit):
 ```ts

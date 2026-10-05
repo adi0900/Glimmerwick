@@ -1,0 +1,16 @@
+# Brief: voxel-world (VOXEL PIVOT, round 1 — the foundation of the new look)
+Owner: `crates/sim_world/**`, `crates/sim_core/src/blocks.rs`, `web/src/modules/voxel/**`. Replaces `web/src/modules/world/**` (delete it after parity). Read first: ART_BIBLE §0 (voxel direction), ARCHITECTURE §4b, WORLD_CONTRACT (v2 note), BRIDGE_API (world section), ENGINE.md, CLEANROOM.md (never copy third-party code/assets).
+Goal: a *gorgeous*, living voxel island diorama that already makes people say "wow" in a still: chunky bevelled blocks, rich painted textures, soft AO, tilt-shift, cool shadows, reflective water — the Minecraft pillar (everything is blocks, editable) at the polish bar of QUALITY_BAR.md.
+
+## Round-1 scope (ordered by impact)
+1. **Block registry + voxel world data + worldgen (Rust).** Reuse the island design in `worldgen.rs` (lobed ~300×235 m island, 3-tier highland with rounded cliff lips, pond fed by a stream, 2 coves, village clearing with paths, 3 islets, sea floor, water at sea level) but make it voxel-native: terraced cliffs with overhangs, stepped hills, beaches, grass-over-dirt, gravel/sand bars, trees as block templates incl. leaves (oak-round, pine, blossom, palm, birch… per contract), bushes, flowers/decor as micro-voxel `flora` instances. 1 m blocks (half-block slabs optional), world ≈ 320 × (≤ 56) × 256. Deterministic; ≤ 1.5 s wasm generation; chunk-diff saves; native tests (determinism, walkable spawn, no floating trees, water connectivity, edit→remesh correctness).
+2. **Meshing + rendering (`modules/voxel`).** Culled/greedy meshing (Rust or JS — your call, document it), per-vertex AO + skylight, procedural 32–64 px painted atlas generated at load (grass top/side, dirt, stone strata, sand, gravel, snow, logs, leaf variants, planks, cobble, path…), shader bevel, leaf wind, cloud shadows (`uCloudShadowTex`), fog + cascaded shadows via the existing uniforms/lighting, wet-sand/snow hooks, frustum culling + sensible LOD/view distance, < 450 draw calls, ≥ 60 fps on the RTX 3060 at 1080p, first load ≤ 8 s (today's shader warm-up is ~25 s — trim program permutations / compile in parallel).
+3. **Water.** Voxel-aligned translucent surface: depth gradient, foam, animated normals, reflections (sky + nearby blocks), keep the `ctx.api.world.addRipple` hook.
+4. **Edit pipeline.** `world.set_block / break_block / place_block`, `world.raycast`, `vox.dirty` → remesh only dirty chunks (< 4 ms); a gallery debug tool (click = break, right-click = place) that proves it.
+5. **Collision/query API** for the movement implementer: fast `is_solid`, `ground_height`, `raycast`, `aabb_sweep` helpers in Rust, documented in BRIDGE_API.md.
+
+## Gallery & shots
+`web/src/modules/voxel/shots.json` ≥ 14 shots: island overview @16:30, shore, cliff face, meadow close, forest, pond/stream, village clearing, sunset water, night, overhang/cave close-up, block close-up (bevel + AO), plus an edit filmstrip. Take them yourself, LOOK at them, iterate ≥ 3 times on the biggest ugliness before reporting.
+
+## Traps
+flat-colour cubes, blurry/stretched textures, shimmering mips, AO seams between chunks, visible chunk borders, noisy staircase terrain, lollipop trees, 1-block spikes, z-fighting on water, huge draw-call counts, 25 s shader warm-up.
