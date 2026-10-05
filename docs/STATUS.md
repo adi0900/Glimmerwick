@@ -15,6 +15,8 @@ Round policy: builder → separate harsh critic (`docs/CRITIC_PROMPT.md`) → sa
 - Honest quality: prototype tier (~4–5/10). No critic has run yet.
 
 ## PLAN after the usage window resets (≈ 03:50 IST)
+**LAUNCHED 2026-10-06 ~04:00 IST (window 0 %, resets ≈ 08:50 IST) by the scheduled restart:** A1 voxel-world builder = `ab47ba686a22f2c2c` (cap ~80 calls) · A2 movement-spec analyst = `adc9823978d221b46` (cap ~25) · A3 Cobblemon-concepts analyst = `aba4988775fc7ae35` (cap ~30). Dev server restarted (background task, 2 h cap → expires ≈ 06:00 IST). **A2 + A3 DONE (~04:30 IST):** `docs/specs/MOVEMENT_SPEC.md` (23 test vectors; core ground/air/jump/sprint model high-confidence, fluids/ladders/sneak-ledge/step-up medium, FOV etc. low; analyst excluded one code-derived snippet) and `docs/specs/CREATURE_LOCOMOTION_NOTES.md` (12 ranked "alive" ideas, 16 test vectors, concepts only, clone deleted). A1 still running; usage was 33 % at ~04:25 IST.
+Plan: when A1 finishes → check usage → launch **B1 movement implementer** (reads ONLY the two specs + our code; gets A1's collision API) and the **A4 critic** concurrently; then B2 voxel-creatures + A1 round 2 (B1 will not fit this window if A1 overruns → next window). Note for B1: JS must lerp creature `yaw` by shortest arc.
 | order | agent | brief | notes |
 |---|---|---|---|
 | A1 | **voxel-world builder** (big) | `docs/briefs/voxel-world.md` | blocks, worldgen, meshing + atlas + bevel/AO shader, water, edit pipeline, collision API; fixes ~25 s first-load shader warm-up |
