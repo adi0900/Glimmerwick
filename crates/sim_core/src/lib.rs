@@ -24,6 +24,7 @@
 //! stable order (sort by [`Id`]) whenever order is observable.
 
 pub mod app_ext;
+pub mod blocks; // voxel-world owner (docs/ARCHITECTURE.md 4b): block registry + raycast / aabb_sweep
 pub mod channels;
 pub mod components;
 pub mod environment;

@@ -1,0 +1,18 @@
+[
+  {"id": "01_overview", "cam": "overview", "time": 16.5, "size": "1280x720"},
+  {"id": "02_top", "cam": "top", "time": 12, "size": "1280x720"},
+  {"id": "03_shore", "cam": "shore", "time": 16.5, "size": "1280x720"},
+  {"id": "04_cliff_face", "cam": "cliff", "time": 16.5, "size": "1280x720"},
+  {"id": "05_cliff_top", "cam": "cliff2", "time": 16.5, "size": "1280x720"},
+  {"id": "06_meadow", "cam": "meadow", "time": 16.5, "size": "1280x720"},
+  {"id": "07_forest", "cam": "forest", "time": 16.5, "size": "1280x720"},
+  {"id": "08_pond", "cam": "pond", "time": 16.5, "size": "1280x720"},
+  {"id": "09_stream", "cam": "stream", "time": 16.5, "size": "1280x720"},
+  {"id": "10_village", "cam": "village", "time": 16.5, "size": "1280x720"},
+  {"id": "11_sunset_water", "cam": "sunset", "time": 18.5, "size": "1280x720"},
+  {"id": "12_night", "cam": "night", "time": 23, "size": "1280x720"},
+  {"id": "13_cave_overhang", "cam": "cave", "time": 16.5, "size": "1280x720", "param": "tilt=0"},
+  {"id": "14_block_closeup", "cam": "closeup", "time": 16.5, "size": "1280x720", "param": "tilt=0"},
+  {"id": "15_seabed", "cam": "seabed", "time": 12, "size": "1280x720"},
+  {"id": "16_edit_filmstrip", "cam": "edit", "time": 16.5, "size": "960x540", "param": "voxdemo=1", "filmstrip": {"frames": 6, "interval": 150}}
+]

@@ -125,6 +125,9 @@ const REQUIRED = {
   'world.height': { kind: 'f32', stride: 1, interpolated: false },
   'world.biome': { kind: 'u8', stride: 1, interpolated: false },
   'world.dirty': { kind: 'u32', stride: 1, interpolated: false },
+  'vox.data': { kind: 'u16', stride: 1, interpolated: false },
+  'vox.chunks': { kind: 'u32', stride: 2, interpolated: false },
+  'vox.dirty': { kind: 'u32', stride: 1, interpolated: false },
   flora: { kind: 'f32', stride: 8, interpolated: false },
   props: { kind: 'f32', stride: 12, interpolated: false },
 };
@@ -149,7 +152,9 @@ for (const [name, want] of Object.entries(REQUIRED)) {
 const world = q(game, 'world.info');
 check(world.size_x > 0 && world.size_z > 0 && world.sea_level === 0, `world.info unexpected: ${JSON.stringify(world).slice(0, 200)}`);
 // size_x / size_z are extents in metres; vertex sampling => n = size / cell + 1 per side
-const nSamples = (Math.round(world.size_x / world.cell) + 1) * (Math.round(world.size_z / world.cell) + 1);
+// ("sample": "cell" = voxel world, one sample per block column => n = size / cell)
+const vtx = world.sample === 'cell' ? 0 : 1;
+const nSamples = (Math.round(world.size_x / world.cell) + vtx) * (Math.round(world.size_z / world.cell) + vtx);
 check(view(game, 'world.height').info.len === nSamples, `world.height length ${view(game, 'world.height').info.len} != ${nSamples} (from world.info)`);
 check(view(game, 'world.biome').info.len === nSamples, `world.biome length ${view(game, 'world.biome').info.len} != ${nSamples} (from world.info)`);
 check(q(game, 'creature.species').length === 3, 'creature.species should list 3 species');

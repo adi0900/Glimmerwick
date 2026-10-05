@@ -86,7 +86,7 @@ function followCamera(ctx: Ctx, s: State, dt: number): void {
 const mod: GameModule = defineModule({
   name: '_slice',
   order: 50,
-  needs: ['world'],
+  needs: ['voxel'],
 
   async init(ctx) {
     const root = new Object3D();

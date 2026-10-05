@@ -51,7 +51,11 @@ fn all_channel_bytes(core: &GameCore) -> Vec<(String, Vec<u8>)> {
     ch.names().into_iter().map(|n| (n.to_string(), ch.to_bytes(n).unwrap())).collect()
 }
 
-const CHANNELS: [(&str, &str, u64, bool); 8] = [
+const CHANNELS: [(&str, &str, u64, bool); 11] = [
+    // voxel world (docs/BRIDGE_API.md, world section)
+    ("vox.data", "u16", 1, false),
+    ("vox.chunks", "u32", 2, false),
+    ("vox.dirty", "u32", 1, false),
     // name, kind, stride, interpolated
     ("time", "f32", 1, false),
     ("player", "f32", 16, true),
@@ -88,8 +92,10 @@ fn channel_table_matches_the_documented_contract() {
     // grid size comes from world.info (extent in metres, vertex sampling: n = size / cell + 1), never a hard-coded constant
     let world = json(&g.query("world.info", ""));
     let cell = world["cell"].as_f64().unwrap();
-    let nx = (world["size_x"].as_f64().unwrap() / cell).round() as u64 + 1;
-    let nz = (world["size_z"].as_f64().unwrap() / cell).round() as u64 + 1;
+    // `sample: "cell"` (voxel world: one sample per block column at its centre) => n = size / cell; "vertex" => + 1
+    let extra = if world["sample"] == "cell" { 0 } else { 1 };
+    let nx = (world["size_x"].as_f64().unwrap() / cell).round() as u64 + extra;
+    let nz = (world["size_z"].as_f64().unwrap() / cell).round() as u64 + extra;
     let samples = nx * nz;
     assert!(samples > 0, "world.info reports an empty grid: {world}");
     assert_eq!(json(&g.channel_info("world.height"))["len"], samples);
