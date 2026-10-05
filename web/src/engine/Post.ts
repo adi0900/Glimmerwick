@@ -3,12 +3,19 @@
  *
  * Pipeline (each stage is quality-gated, see QualityPreset):
  *   RenderPass (HDR half-float buffer, MSAA 0/2/4/8)
- *   -> [high+] EffectPass: TiltShift (subtle miniature feel; blurs the HDR image so bloom/AO stay consistent)
- *   -> [high+] AOPass (custom, half-res, depth-only Alchemy-style AO + bilateral blur; no extra scene pass)
- *   -> EffectPass: AO composite · Bloom (emissives/sun only) · ToneMapping (Neutral by default) · Grade (violet
- *      vignette, saturation, black floor) -- dithered to kill sky banding
+ *   -> [high+] EffectPass: DofEffect (depth-based DOF whose focus follows the player / the view-ray ground hit, plus a
+ *      subtle tilt-shift band; the in-focus range is wide so the island and the player stay crisp, only the far
+ *      sea/sky and the extreme foreground soften). Runs in HDR so bloom / AO stay consistent.
+ *   -> [high+] AOPass (custom, half-res, depth-only Alchemy-style AO + bilateral blur; no extra scene pass).
+ *      Depth is fetched with texelFetch at explicit full-res texel coordinates: sampling the full-res depth texture
+ *      at half-res texel centres lands exactly on texel borders, and the nearest-texel flip along that border made
+ *      thin horizontal stripes across the ground (the "banding" seen in round 0).
+ *   -> EffectPass: AO composite · depth outlines (coloured, distance-faded) · Bloom (emissives/sun only) ·
+ *      ToneMapping (Neutral by default) · Grade (split-tone, saturation, violet vignette, black floor) -- dithered
  *   -> [low] FXAA / [ultra] SMAA as a last pass
  *
+ * AA choice: MSAA on the HDR buffer (4x high / 8x ultra) -- no temporal shimmer on foliage / grass, resolve happens
+ * before post so DOF / AO / outlines see clean edges. SMAA on ultra only cleans the remaining post-process edges.
  * Tone mapping: Khronos PBR Neutral keeps hues saturated and joyful; AgX is a softer alternative
  * (`post.setToneMapping('agx')`, or `?tm=agx`). Exposure lives in `renderer.toneMappingExposure` (Lighting).
  */
@@ -35,18 +42,18 @@ import {
   BlendFunction,
   BloomEffect,
   Effect,
+  EffectAttribute,
   EffectComposer,
   EffectPass,
   FXAAEffect,
-  KernelSize,
   Pass,
   RenderPass,
   SMAAEffect,
   SMAAPreset,
-  TiltShiftEffect,
   ToneMappingEffect,
   ToneMappingMode,
 } from 'postprocessing';
+import { lookState } from './Lighting';
 import type { QualityPreset } from './types';
 
 export type ToneMapName = 'neutral' | 'agx' | 'aces' | 'linear';
@@ -67,13 +74,17 @@ uniform vec3 uVigTint;
 uniform float uSat;
 uniform float uContrast;
 uniform vec3 uFloor;
+uniform vec3 uShadowTint;
+uniform vec3 uHighTint;
 void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
   vec3 c = inputColor.rgb;
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c = mix(vec3(l), c, uSat);
+  // split-tone: cool saturated shadows, warm lights (the first-party toy-light tell)
+  c *= mix(uShadowTint, uHighTint, smoothstep(0.04, 0.7, l));
   // gentle contrast around mid grey (display-referred after tone mapping)
   c = (c - 0.18) * uContrast + 0.18;
-  // never pure black: lift toward blue-violet (ART_BIBLE §1: darkest shadow >= ~12 % luminance)
+  // never pure black: lift toward blue-violet (ART_BIBLE section 1: darkest shadow >= ~12 % luminance)
   c = max(c, uFloor) + uFloor * 0.5 * (1.0 - clamp(c * 4.0, 0.0, 1.0));
   // soft violet vignette (not black)
   vec2 q = (uv - 0.5) * vec2(aspect, 1.0);
@@ -89,12 +100,146 @@ class GradeEffect extends Effect {
     super('GradeEffect', GRADE_FRAG, {
       blendFunction: BlendFunction.SRC,
       uniforms: new Map<string, Uniform>([
-        ['uVigOffset', new Uniform(0.38)],
-        ['uVigDark', new Uniform(0.3)],
+        ['uVigOffset', new Uniform(0.4)],
+        ['uVigDark', new Uniform(0.26)],
         ['uVigTint', new Uniform(new Color('#7C6CB8'))],
-        ['uSat', new Uniform(1.1)],
-        ['uContrast', new Uniform(1.06)],
+        ['uSat', new Uniform(1.14)],
+        ['uContrast', new Uniform(1.07)],
         ['uFloor', new Uniform(new Color(0.018, 0.012, 0.042))],
+        ['uShadowTint', new Uniform(new Color(0.95, 0.965, 1.07))],
+        ['uHighTint', new Uniform(new Color(1.03, 1.0, 0.97))],
+      ]),
+    });
+  }
+  u<T = number>(name: string): Uniform<T> {
+    return this.uniforms.get(name) as Uniform<T>;
+  }
+}
+
+// ------------------------------------------------------------------------------------------ DOF (+ subtle tilt-shift)
+
+const DOF_FRAG = /* glsl */ `
+uniform float uFocus;        // view-space distance (m) kept razor sharp
+uniform float uMaxCoc;       // max blur radius in px at 720p
+uniform float uNear;
+uniform float uFar;
+uniform float uTiltArea;     // fraction of the screen height kept crisp by the tilt-shift term (centred)
+uniform float uTiltFeather;
+uniform float uTiltOffset;
+uniform float uTiltStrength; // 0..1 of the max blur reached at the very top / bottom of the frame
+uniform float uDofStrength;
+
+float gwDofLin(float d) {
+  float z = d * 2.0 - 1.0;
+  return 2.0 * uNear * uFar / (uFar + uNear - z * (uFar - uNear));
+}
+
+float gwDofCoc(vec2 uv, float d) {
+  float z = gwDofLin(d);
+  float f = max(uFocus, 1.0);
+  float farK = smoothstep(f * 1.6, f * 7.0 + 30.0, z);
+  if (d >= 0.99999) farK *= 0.35;                       // keep sky and clouds soft but legible
+  float nearK = 1.0 - smoothstep(0.5, max(2.5, f * 0.3), z);
+  float depthC = max(farK * 0.65, nearK) * uDofStrength;
+  float ty = abs(uv.y - 0.5 - uTiltOffset) * 2.0;       // 0 centre .. 1 edge
+  float tilt = smoothstep(uTiltArea, uTiltArea + uTiltFeather, ty) * uTiltStrength;
+  return clamp(max(depthC, tilt), 0.0, 1.0);
+}
+
+float gwDofIgn(vec2 p) {
+  return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
+
+void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
+  float scale = uMaxCoc * resolution.y / 720.0;
+  float R = gwDofCoc(uv, depth) * scale;
+  if (R < 0.6) {
+    outputColor = inputColor;
+    return;
+  }
+  vec3 acc = inputColor.rgb;
+  float wsum = 1.0;
+  float rot = gwDofIgn(gl_FragCoord.xy) * 6.2831853;
+  for (int i = 0; i < 20; i++) {
+    float fi = float(i) + 0.5;
+    float r = sqrt(fi / 20.0);
+    float a = rot + fi * 2.3999632;
+    vec2 off = vec2(cos(a), sin(a)) * r * R;
+    vec2 suv = uv + off * texelSize;
+    float dS = readDepth(suv);
+    float cS = gwDofCoc(suv, dS) * scale;
+    float w = clamp(cS - r * R + 1.0, 0.0, 1.0);        // a sample only contributes if its own blur reaches this pixel
+    acc += texture2D(inputBuffer, suv).rgb * w;
+    wsum += w;
+  }
+  outputColor = vec4(acc / wsum, inputColor.a);
+}
+`;
+
+class DofEffect extends Effect {
+  constructor() {
+    super('DofEffect', DOF_FRAG, {
+      blendFunction: BlendFunction.SRC,
+      attributes: EffectAttribute.DEPTH | EffectAttribute.CONVOLUTION,
+      uniforms: new Map<string, Uniform>([
+        ['uFocus', new Uniform(14)],
+        ['uMaxCoc', new Uniform(6)],
+        ['uNear', new Uniform(0.15)],
+        ['uFar', new Uniform(1500)],
+        ['uTiltArea', new Uniform(0.62)],
+        ['uTiltFeather', new Uniform(0.38)],
+        ['uTiltOffset', new Uniform(0)],
+        ['uTiltStrength', new Uniform(0.5)],
+        ['uDofStrength', new Uniform(1)],
+      ]),
+    });
+  }
+  u<T = number>(name: string): Uniform<T> {
+    return this.uniforms.get(name) as Uniform<T>;
+  }
+}
+
+// ------------------------------------------------------------------------------------------ Outlines
+
+const OUTLINE_FRAG = /* glsl */ `
+uniform float uOutline;
+uniform float uOutNear;
+uniform float uOutFar;
+uniform vec3 uOutTint;
+
+float gwOutLin(float d) {
+  float z = d * 2.0 - 1.0;
+  return 2.0 * uOutNear * uOutFar / (uOutFar + uOutNear - z * (uOutFar - uOutNear));
+}
+
+void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
+  outputColor = inputColor;
+  if (depth >= 0.99999 || uOutline <= 0.001) return;
+  float z0 = gwOutLin(depth);
+  vec2 t = texelSize * max(1.0, resolution.y / 900.0);
+  float zl = gwOutLin(readDepth(uv - vec2(t.x, 0.0)));
+  float zr = gwOutLin(readDepth(uv + vec2(t.x, 0.0)));
+  float zu = gwOutLin(readDepth(uv + vec2(0.0, t.y)));
+  float zd = gwOutLin(readDepth(uv - vec2(0.0, t.y)));
+  float e = max(abs(zl + zr - 2.0 * z0), abs(zu + zd - 2.0 * z0));      // depth cliff (silhouette), not slope
+  float nearer = step(0.0, (zl + zr + zu + zd) * 0.25 - z0);             // draw on the object side only
+  float edge = smoothstep(1.0, 2.2, e / (z0 * 0.035 + 0.04)) * nearer;
+  float fade = 1.0 - smoothstep(70.0, 260.0, z0);                        // distance-faded
+  outputColor.rgb = mix(inputColor.rgb, inputColor.rgb * uOutTint, edge * fade * uOutline);
+}
+`;
+
+class OutlineEffect extends Effect {
+  constructor() {
+    super('OutlineEffect', OUTLINE_FRAG, {
+      blendFunction: BlendFunction.SRC,
+      attributes: EffectAttribute.DEPTH,
+      uniforms: new Map<string, Uniform>([
+        ['uOutline', new Uniform(0.55)],
+        ['uOutNear', new Uniform(0.15)],
+        ['uOutFar', new Uniform(1500)],
+        // hue-shifted darker, never black: cool violet-brown
+        ['uOutTint', new Uniform(new Color(0.5, 0.42, 0.66))],
       ]),
     });
   }
@@ -118,46 +263,49 @@ precision highp float;
 #include <common>
 varying vec2 vUv;
 uniform sampler2D depthBuffer;
-uniform vec2 texel;
 uniform mat4 projInv;
-uniform float focalPx;       // projection scale in pixels at unit distance
+uniform float focalPx;       // projection scale in FULL-res pixels at unit distance
 uniform float radius;        // world metres
 uniform float intensity;
 uniform float bias;
 
-vec3 viewPos( vec2 uv ) {
-  float d = texture2D( depthBuffer, uv ).r;
+const float BAYER4[16] = float[16]( 0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0 );
+
+// explicit full-res texel fetch (never sample the depth texture on a texel border)
+vec3 gwViewPos( ivec2 p, ivec2 fs ) {
+  p = clamp( p, ivec2( 0 ), fs - ivec2( 1 ) );
+  float d = texelFetch( depthBuffer, p, 0 ).r;
+  vec2 uv = ( vec2( p ) + 0.5 ) / vec2( fs );
   vec4 v = projInv * vec4( uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0 );
   return v.xyz / v.w;
 }
 
-float ign( vec2 p ) {
-  return fract( 52.9829189 * fract( dot( p, vec2( 0.06711056, 0.00583715 ) ) ) );
-}
-
 void main() {
-  float d0 = texture2D( depthBuffer, vUv ).r;
+  ivec2 fs = textureSize( depthBuffer, 0 );
+  ivec2 c = clamp( ivec2( gl_FragCoord.xy ) * 2 + ivec2( 1 ), ivec2( 0 ), fs - ivec2( 1 ) );
+  float d0 = texelFetch( depthBuffer, c, 0 ).r;
   if ( d0 >= 0.99999 ) { gl_FragColor = vec4( 1.0 ); return; } // sky
-  vec3 P = viewPos( vUv );
-  vec3 Pr = viewPos( vUv + vec2( texel.x, 0.0 ) );
-  vec3 Pl = viewPos( vUv - vec2( texel.x, 0.0 ) );
-  vec3 Pu = viewPos( vUv + vec2( 0.0, texel.y ) );
-  vec3 Pd = viewPos( vUv - vec2( 0.0, texel.y ) );
+  vec3 P = gwViewPos( c, fs );
+  vec3 Pr = gwViewPos( c + ivec2( 1, 0 ), fs );
+  vec3 Pl = gwViewPos( c - ivec2( 1, 0 ), fs );
+  vec3 Pu = gwViewPos( c + ivec2( 0, 1 ), fs );
+  vec3 Pd = gwViewPos( c - ivec2( 0, 1 ), fs );
   vec3 dx = abs( Pr.z - P.z ) < abs( P.z - Pl.z ) ? Pr - P : P - Pl;
   vec3 dy = abs( Pu.z - P.z ) < abs( P.z - Pd.z ) ? Pu - P : P - Pd;
   vec3 N = normalize( cross( dx, dy ) );
   if ( dot( N, P ) > 0.0 ) N = -N;
 
-  float rpx = clamp( radius * focalPx / max( -P.z, 0.1 ), 2.5, 90.0 );
-  float ang0 = ign( gl_FragCoord.xy ) * 6.2831853;
-  const int NS = 14;
+  float rpx = clamp( radius * focalPx / max( -P.z, 0.1 ), 3.0, 180.0 );
+  ivec2 hp = ivec2( gl_FragCoord.xy );
+  float ang0 = ( BAYER4[ ( hp.y & 3 ) * 4 + ( hp.x & 3 ) ] + 0.5 ) / 16.0 * 6.2831853;
+  const int NS = 16;
   float occ = 0.0;
   for ( int i = 0; i < NS; i ++ ) {
     float fi = float( i );
     float r = sqrt( ( fi + 0.5 ) / float( NS ) );
     float a = ang0 + fi * 2.3999632;
-    vec2 off = vec2( cos( a ), sin( a ) ) * r * rpx * texel;
-    vec3 S = viewPos( vUv + off );
+    ivec2 sp = c + ivec2( floor( vec2( cos( a ), sin( a ) ) * r * rpx + 0.5 ) );
+    vec3 S = gwViewPos( sp, fs );
     vec3 v = S - P;
     float vv = dot( v, v );
     float vn = dot( v, N ) - bias * -P.z * 0.02;
@@ -176,23 +324,31 @@ precision highp float;
 varying vec2 vUv;
 uniform sampler2D aoMap;
 uniform sampler2D depthBuffer;
-uniform vec2 dir;       // texel step along the blur axis
+uniform vec2 dir;       // unit step along the blur axis, in half-res texels
+uniform vec2 texel;     // 1 / half-res size
 uniform float near;
 uniform float far;
-float lz( vec2 uv ) { return -perspectiveDepthToViewZ( texture2D( depthBuffer, uv ).r, near, far ); }
+float gwLz( ivec2 p, ivec2 fs ) {
+  p = clamp( p, ivec2( 0 ), fs - ivec2( 1 ) );
+  return -perspectiveDepthToViewZ( texelFetch( depthBuffer, p, 0 ).r, near, far );
+}
 void main() {
-  float z0 = lz( vUv );
-  float sum = texture2D( aoMap, vUv ).r * 0.2;
-  float wsum = 0.2;
-  for ( int i = 1; i <= 3; i ++ ) {
+  ivec2 fs = textureSize( depthBuffer, 0 );
+  ivec2 c = ivec2( gl_FragCoord.xy ) * 2 + ivec2( 1 );
+  ivec2 stp = ivec2( dir ) * 2;
+  float z0 = gwLz( c, fs );
+  float sum = texture2D( aoMap, vUv ).r;
+  float wsum = 1.0;
+  for ( int i = 1; i <= 4; i ++ ) {
     float fi = float( i );
-    float w = exp( -fi * fi * 0.18 );
+    float w = exp( -fi * fi * 0.10 );
     for ( int s = -1; s <= 1; s += 2 ) {
-      vec2 uv = vUv + dir * fi * float( s );
-      float z = lz( uv );
+      vec2 uv = vUv + dir * texel * fi * float( s );
+      float z = gwLz( c + stp * i * s, fs );
       float wz = exp( -abs( z - z0 ) / max( z0 * 0.02, 0.02 ) );
-      sum += texture2D( aoMap, uv ).r * w * wz * 0.2;
-      wsum += w * wz * 0.2;
+      float ww = w * wz;
+      sum += texture2D( aoMap, uv ).r * ww;
+      wsum += ww;
     }
   }
   gl_FragColor = vec4( vec3( sum / wsum ), 1.0 );
@@ -209,6 +365,7 @@ class AOPass extends Pass {
   intensity = 1.0;
   bias = 0.4;
   private readonly size = new Vector2(1, 1);
+  private fullH = 1;
 
   constructor(
     private cam: PerspectiveCamera,
@@ -229,7 +386,6 @@ class AOPass extends Pass {
       depthWrite: false,
       uniforms: {
         depthBuffer: { value: null },
-        texel: { value: new Vector2() },
         projInv: { value: cam.projectionMatrixInverse },
         focalPx: { value: 1 },
         radius: { value: this.radius },
@@ -247,6 +403,7 @@ class AOPass extends Pass {
         aoMap: { value: null },
         depthBuffer: { value: null },
         dir: { value: new Vector2() },
+        texel: { value: new Vector2() },
         near: { value: cam.near },
         far: { value: cam.far },
       },
@@ -276,9 +433,10 @@ class AOPass extends Pass {
     const w = Math.max(2, Math.floor(width * this.scale));
     const h = Math.max(2, Math.floor(height * this.scale));
     this.size.set(w, h);
+    this.fullH = height;
     this.target.setSize(w, h);
     this.tmp.setSize(w, h);
-    (this.aoMat.uniforms.texel!.value as Vector2).set(1 / w, 1 / h);
+    (this.blurMat.uniforms.texel!.value as Vector2).set(1 / w, 1 / h);
   }
 
   override render(renderer: WebGLRenderer): void {
@@ -286,7 +444,7 @@ class AOPass extends Pass {
     const cam = this.cam;
     const u = this.aoMat.uniforms;
     u.projInv!.value = cam.projectionMatrixInverse;
-    u.focalPx!.value = 0.5 * this.size.y * cam.projectionMatrix.elements[5]!;
+    u.focalPx!.value = 0.5 * this.fullH * cam.projectionMatrix.elements[5]!;
     u.radius!.value = this.radius;
     u.intensity!.value = this.intensity;
     u.bias!.value = this.bias;
@@ -299,11 +457,11 @@ class AOPass extends Pass {
     b.far!.value = cam.far;
     this.fullscreenMaterial = this.blurMat;
     b.aoMap!.value = this.target.texture;
-    (b.dir!.value as Vector2).set(1 / this.size.x, 0);
+    (b.dir!.value as Vector2).set(1, 0);
     renderer.setRenderTarget(this.tmp);
     renderer.render(this.scene, this.camera);
     b.aoMap!.value = this.tmp.texture;
-    (b.dir!.value as Vector2).set(0, 1 / this.size.y);
+    (b.dir!.value as Vector2).set(0, 1);
     renderer.setRenderTarget(this.target);
     renderer.render(this.scene, this.camera);
   }
@@ -343,25 +501,36 @@ export class Post {
   enabled = true;
   /** live handles (rebuilt on quality change) */
   bloom: BloomEffect | null = null;
-  tilt: TiltShiftEffect | null = null;
+  /** depth-of-field + tilt-shift effect (kept under its old name for compatibility) */
+  tilt: DofEffect | null = null;
   tone: ToneMappingEffect | null = null;
   grade: GradeEffect | null = null;
   ao: AOPass | null = null;
   aoComposite: AOCompositeEffect | null = null;
+  outline: OutlineEffect | null = null;
 
   /** tweakables (applied on build and live through `apply()`) */
   params = {
     toneMapping: 'neutral' as ToneMapName,
-    bloomIntensity: 0.55,
-    bloomThreshold: 0.92,
+    bloomIntensity: 0.5,
+    bloomThreshold: 0.95,
     bloomSmoothing: 0.35,
     bloomRadius: 0.8,
     aoRadius: 0.9,
     aoIntensity: 1.35,
     aoStrength: 0.85,
-    tiltOffset: -0.02,
-    tiltFocus: 1.0,
-    tiltFeather: 0.3,
+    /** tilt-shift band: fraction of the frame height kept crisp (centred), feather, offset, strength of the edge blur */
+    tiltOffset: 0.0,
+    tiltFocus: 0.62,
+    tiltFeather: 0.38,
+    tiltStrength: 0.5,
+    /** depth of field: strength (0 = off) and max blur radius in px at 720p */
+    dofStrength: 1.0,
+    dofMaxCoc: 6,
+    /** coloured, distance-faded silhouette outlines (0 = off) */
+    outline: 0.55,
+    saturation: 1.14,
+    contrast: 1.07,
   };
 
   private q: QualityPreset;
@@ -395,21 +564,14 @@ export class Post {
     const q = this.q;
     for (const p of c.passes) p.dispose();
     c.removeAllPasses();
-    this.bloom = this.tilt = this.tone = this.grade = this.aoComposite = null;
+    this.bloom = this.tilt = this.tone = this.grade = this.aoComposite = this.outline = null;
     this.ao = null;
     c.multisampling = Math.min(q.msaa, this.msaaMax);
 
     c.addPass(new RenderPass(this.scene, this.camera));
 
     if (q.tiltShift) {
-      this.tilt = new TiltShiftEffect({
-        offset: this.params.tiltOffset,
-        rotation: 0,
-        focusArea: this.params.tiltFocus,
-        feather: this.params.tiltFeather,
-        kernelSize: KernelSize.SMALL,
-        resolutionScale: 0.5,
-      });
+      this.tilt = new DofEffect();
       c.addPass(new EffectPass(this.camera, this.tilt));
     }
 
@@ -419,6 +581,10 @@ export class Post {
       c.addPass(this.ao);
       this.aoComposite = new AOCompositeEffect(this.ao.texture);
       fx.push(this.aoComposite);
+    }
+    if (q.detail >= 1) {
+      this.outline = new OutlineEffect();
+      fx.push(this.outline);
     }
     if (q.bloom) {
       this.bloom = new BloomEffect({
@@ -461,9 +627,36 @@ export class Post {
     }
     if (this.aoComposite) this.aoComposite.u('uAoStrength').value = p.aoStrength;
     if (this.tilt) {
-      this.tilt.offset = p.tiltOffset;
-      this.tilt.focusArea = p.tiltFocus;
-      this.tilt.feather = p.tiltFeather;
+      this.tilt.u('uMaxCoc').value = p.dofMaxCoc;
+      this.tilt.u('uDofStrength').value = p.dofStrength;
+      this.tilt.u('uTiltArea').value = p.tiltFocus;
+      this.tilt.u('uTiltFeather').value = p.tiltFeather;
+      this.tilt.u('uTiltOffset').value = p.tiltOffset;
+      this.tilt.u('uTiltStrength').value = p.tiltStrength;
+    }
+    if (this.outline) this.outline.u('uOutline').value = p.outline;
+    if (this.grade) this.grade.u('uContrast').value = p.contrast;
+  }
+
+  /** per-frame look state: DOF focus, camera planes, time-of-day grade (warm lights at golden hour, cool at night) */
+  private sync(): void {
+    const L = lookState;
+    const cam = this.camera;
+    if (this.tilt) {
+      this.tilt.u('uFocus').value = L.focus;
+      this.tilt.u('uNear').value = cam.near;
+      this.tilt.u('uFar').value = cam.far;
+    }
+    if (this.outline) {
+      this.outline.u('uOutNear').value = cam.near;
+      this.outline.u('uOutFar').value = cam.far;
+    }
+    if (this.grade) {
+      const warm = L.golden;
+      const night = L.night;
+      this.grade.u<Color>('uHighTint').value.setRGB(1.03 + 0.07 * warm, 1.0 + 0.02 * warm, 0.97 - 0.10 * warm + 0.07 * night);
+      this.grade.u<Color>('uShadowTint').value.setRGB(0.95 - 0.04 * night, 0.965 - 0.01 * night, 1.07 + 0.07 * night);
+      this.grade.u('uSat').value = this.params.saturation + 0.05 * warm + 0.04 * night - 0.15 * L.grey;
     }
   }
 
@@ -490,6 +683,7 @@ export class Post {
       this.renderer.toneMapping = NoToneMapping;
       return;
     }
+    this.sync();
     this.composer.render(dt);
   }
 

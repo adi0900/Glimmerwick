@@ -147,7 +147,11 @@ for (const [name, want] of Object.entries(REQUIRED)) {
   check(i.ptr % size === 0 && i.ptr + i.cap * size <= memory.buffer.byteLength, `${name}: ptr ${i.ptr} (cap ${i.cap}) outside wasm memory`);
 }
 const world = q(game, 'world.info');
-check(world.size_x === 128 && world.size_z === 128 && world.sea_level === 0, `world.info unexpected: ${JSON.stringify(world).slice(0, 200)}`);
+check(world.size_x > 0 && world.size_z > 0 && world.sea_level === 0, `world.info unexpected: ${JSON.stringify(world).slice(0, 200)}`);
+// size_x / size_z are extents in metres; vertex sampling => n = size / cell + 1 per side
+const nSamples = (Math.round(world.size_x / world.cell) + 1) * (Math.round(world.size_z / world.cell) + 1);
+check(view(game, 'world.height').info.len === nSamples, `world.height length ${view(game, 'world.height').info.len} != ${nSamples} (from world.info)`);
+check(view(game, 'world.biome').info.len === nSamples, `world.biome length ${view(game, 'world.biome').info.len} != ${nSamples} (from world.info)`);
 check(q(game, 'creature.species').length === 3, 'creature.species should list 3 species');
 check(view(game, 'creatures').info.len === 12 * 16, 'expected 12 creatures at start');
 check(game.channel_info('nope').includes('error'), 'unknown channel should return an error object');

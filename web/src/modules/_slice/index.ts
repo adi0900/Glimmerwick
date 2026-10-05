@@ -2,27 +2,23 @@
  * `_slice` -- PLACEHOLDER reference slice (order 50). NOT part of the final game: it exists so the engine, the
  * bridge (real wasm or mock), the galleries and the screenshot tools can be exercised end-to-end from day one.
  *
- * It renders whatever the bridge provides: terrain mesh from `world.height`, water plane, instanced flora from the
+ * It renders whatever the bridge provides: instanced flora from the
  * `flora` channel, interpolated creatures, the player and a third-person follow camera (mouse-look + WASD).
  * Sun / sky / fog / shadows come from the engine's Lighting (driven by the `time` channel).
  *
  * Delete this folder when the real world / flora / creatures / characters modules take over
  * (or run `/?view=game&without=_slice`).
  */
-import { CircleGeometry, Color, Mesh, Object3D, Vector3 } from 'three';
+import { Object3D, Vector3 } from 'three';
 import type { Ctx, GameModule } from '../../engine/types';
 import { defineModule } from '../../engine/types';
 import { buildCreatures, type CreatureSystem } from './creatures';
 import { buildFlora, type FloraSystem } from './flora';
 import { PlayerAvatar } from './player';
-import { buildTerrain } from './terrain';
-import { buildWater, type Water } from './water';
 import { deriveCams, spawnXZ } from './cams';
 
 interface State {
   root: Object3D;
-  terrain: Mesh | null;
-  water: Water | null;
   flora: FloraSystem | null;
   creatures: CreatureSystem | null;
   player: PlayerAvatar;
@@ -31,7 +27,6 @@ interface State {
   camPos: Vector3;
   camLook: Vector3;
   camInit: boolean;
-  fallback: Mesh | null;
 }
 
 let S: State | null = null;
@@ -39,40 +34,6 @@ let S: State | null = null;
 const tmp = new Vector3();
 const desired = new Vector3();
 const target = new Vector3();
-
-function rebuildWorld(ctx: Ctx, s: State): void {
-  const world = ctx.game.world;
-  if (s.terrain) {
-    s.root.remove(s.terrain);
-    s.terrain.geometry.dispose();
-    (s.terrain.material as { dispose(): void }).dispose();
-    s.terrain = null;
-  }
-  if (s.fallback) {
-    s.root.remove(s.fallback);
-    s.fallback = null;
-  }
-  if (!world.ready) {
-    // No world from the sim (yet): a flat meadow disc keeps the scene readable and says so loudly in the console.
-    console.warn('[_slice] no world.height from the bridge: rendering a flat fallback ground');
-    const geo = new CircleGeometry(160, 48);
-    geo.rotateX(-Math.PI / 2);
-    const mat = ctx.mats.ground({ vertexColors: false, color: new Color('#7BD35A'), name: 'slice.fallback' });
-    s.fallback = new Mesh(geo, mat);
-    s.fallback.receiveShadow = true;
-    s.root.add(s.fallback);
-    return;
-  }
-  const info = world.info!;
-  s.terrain = buildTerrain(world, ctx.mats);
-  s.root.add(s.terrain);
-  if (s.water) s.water.refresh(world);
-  else {
-    s.water = buildWater(world, ctx.uniforms);
-    s.root.add(s.water.mesh);
-  }
-  ctx.uniforms.uWorldSize.value.set(world.extentX, world.extentZ, info.origin_x, info.origin_z);
-}
 
 function rebuildFlora(ctx: Ctx, s: State): void {
   if (s.flora) {
@@ -125,6 +86,7 @@ function followCamera(ctx: Ctx, s: State, dt: number): void {
 const mod: GameModule = defineModule({
   name: '_slice',
   order: 50,
+  needs: ['world'],
 
   async init(ctx) {
     const root = new Object3D();
@@ -132,8 +94,6 @@ const mod: GameModule = defineModule({
     ctx.scene.add(root);
     S = {
       root,
-      terrain: null,
-      water: null,
       flora: null,
       creatures: null,
       player: new PlayerAvatar(ctx.mats),
@@ -142,10 +102,8 @@ const mod: GameModule = defineModule({
       camPos: new Vector3(),
       camLook: new Vector3(),
       camInit: false,
-      fallback: null,
     };
     root.add(S.player.group);
-    rebuildWorld(ctx, S);
     S.worldVer = ctx.game.world.version;
     rebuildFlora(ctx, S);
     S.floraVer = ctx.game.has('flora') ? ctx.game.channel('flora').ver : 0;
@@ -163,11 +121,6 @@ const mod: GameModule = defineModule({
     const s = S;
     if (!s) return;
     const world = ctx.game.world;
-    const wv = world.version;
-    if (wv !== s.worldVer) {
-      s.worldVer = wv;
-      rebuildWorld(ctx, s);
-    }
     if (ctx.game.has('flora')) {
       const fv = ctx.game.channel('flora').ver;
       if (fv !== s.floraVer) {
@@ -203,7 +156,6 @@ const mod: GameModule = defineModule({
     if (!S) return;
     S.flora?.dispose();
     S.creatures?.dispose();
-    S.water?.dispose();
     S.player.dispose();
     S.root.parent?.remove(S.root);
     S = null;

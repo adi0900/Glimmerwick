@@ -85,8 +85,15 @@ fn channel_table_matches_the_documented_contract() {
     assert_eq!(json(&g.channel_info("time"))["len"], 16);
     assert_eq!(json(&g.channel_info("player"))["len"], 16);
     assert_eq!(json(&g.channel_info("creatures"))["len"], 12 * 16);
-    assert_eq!(json(&g.channel_info("world.height"))["len"], 128 * 128);
-    assert_eq!(json(&g.channel_info("world.biome"))["len"], 128 * 128);
+    // grid size comes from world.info (extent in metres, vertex sampling: n = size / cell + 1), never a hard-coded constant
+    let world = json(&g.query("world.info", ""));
+    let cell = world["cell"].as_f64().unwrap();
+    let nx = (world["size_x"].as_f64().unwrap() / cell).round() as u64 + 1;
+    let nz = (world["size_z"].as_f64().unwrap() / cell).round() as u64 + 1;
+    let samples = nx * nz;
+    assert!(samples > 0, "world.info reports an empty grid: {world}");
+    assert_eq!(json(&g.channel_info("world.height"))["len"], samples);
+    assert_eq!(json(&g.channel_info("world.biome"))["len"], samples);
     assert_eq!(json(&g.channel_info("world.dirty"))["len"], 0);
     assert_eq!(json(&g.channel_info("props"))["len"], 0);
     assert!(json(&g.channel_info("flora"))["len"].as_u64().unwrap() >= 8 * 100);

@@ -80,6 +80,8 @@ export interface ToonOptions {
   translucency?: number;
   /** bevel / hard-edge warm lift 0..1 */
   edge?: number;
+  /** hand-painted terminator wobble (band edges follow brush noise) 0..0.3 */
+  wobble?: number;
   /** emissive pulse amount (glow) 0..1 */
   pulse?: number;
   /** wind sway: true/{...} to enable (foliage default) */
@@ -102,9 +104,9 @@ const CLASS_DEFAULTS: Record<ToonClass, ToonOptions> = {
   // characters / creatures: soft felt-clay, strong warm rim, painterly but gentle
   clay: { paint: 0.7, paintScale: 1.0, paintSpace: 'object', shade: 0.65, rim: 0.28, bands: 3, softness: 0.11, edge: 0.45 },
   // leaves: back-lit translucency + wind
-  foliage: { paint: 0.9, paintScale: 1.3, paintSpace: 'world', shade: 0.75, rim: 0.22, bands: 3, softness: 0.12, translucency: 0.55, edge: 0, wind: { amp: 0.12, height: 4, speed: 1 } },
+  foliage: { wobble: 0.14, paint: 0.9, paintScale: 1.3, paintSpace: 'world', shade: 0.75, rim: 0.22, bands: 3, softness: 0.12, translucency: 0.55, edge: 0, wind: { amp: 0.12, height: 4, speed: 1 } },
   // rock: bigger brush, lavender shadows, hard bevel highlights
-  stone: { paint: 1.0, paintScale: 1.5, paintSpace: 'world', shade: 0.85, shadeTint: LAVENDER, rim: 0.12, bands: 4, softness: 0.09, edge: 0.9 },
+  stone: { wobble: 0.1, paint: 1.0, paintScale: 1.5, paintSpace: 'world', shade: 0.85, shadeTint: LAVENDER, rim: 0.12, bands: 4, softness: 0.09, edge: 0.9 },
   // timber: stretched grain strokes
   wood: { paint: 0.85, paintScale: 1.1, paintSpace: 'object', shade: 0.7, rim: 0.18, bands: 3, softness: 0.1, edge: 0.6 },
   // glossy toys / eyes
@@ -112,7 +114,7 @@ const CLASS_DEFAULTS: Record<ToonClass, ToonOptions> = {
   // luminous things (bloom picks these up)
   glow: { paint: 0.25, paintSpace: 'object', shade: 0.25, rim: 0.4, bands: 2, softness: 0.25, emissiveIntensity: 2.4, pulse: 0.25, edge: 0 },
   // terrain & other big ground surfaces (use with vertexColors)
-  ground: { paint: 1.0, paintScale: 0.9, paintSpace: 'world', shade: 0.8, rim: 0, bands: 3, softness: 0.12, edge: 0, cloudShadow: true },
+  ground: { wobble: 0.03, paint: 1.0, paintScale: 0.9, paintSpace: 'world', shade: 0.62, rim: 0, bands: 3, softness: 0.12, edge: 0, cloudShadow: true },
 };
 
 // ------------------------------------------------------------------------------------------------- GLSL
@@ -218,6 +220,7 @@ uniform float uGwSpec;
 uniform float uGwSpecPower;
 uniform float uGwTrans;
 uniform float uGwEdge;
+uniform float uGwWobble;
 uniform float uGwPulse;
 uniform float uTime;
 uniform vec3 uSunDir;
@@ -232,6 +235,23 @@ uniform vec4 uCloudShadowParams;
 #include <gw_toon>
 #include <gw_paint>
 #include <gw_fog>
+
+// hand-painted terminator: the light/shadow band edges wobble like brush strokes (not a perfect CG gradient)
+float gwWobble() {
+#ifdef GW_PAINT
+  #ifdef GW_PAINT_OBJECT
+    vec3 wp = vGwLocal;
+  #else
+    vec3 wp = vGwWorld;
+  #endif
+  float fp = length( fwidth( vGwWorld ) );
+  float n = gwNoise3( wp * uGwPaintScale * 5.5 + vec3( 3.7, 1.3, 8.9 ) ) - 0.5;
+  n += ( gwNoise3( wp * uGwPaintScale * 17.0 ) - 0.5 ) * 0.45 * ( 1.0 - smoothstep( 0.02, 0.09, fp * 17.0 ) );
+  return n * uGwWobble * uGwPaint;
+#else
+  return 0.0;
+#endif
+}
 `;
 
 const FRAG_LIGHTS_PARS = /* glsl */ `
@@ -245,7 +265,7 @@ struct ToonMaterial {
 };
 
 void RE_Direct_Toon( const in IncidentLight directLight, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in ToonMaterial material, inout ReflectedLight reflectedLight ) {
-  float ndl = dot( geometryNormal, directLight.direction );
+  float ndl = dot( geometryNormal, directLight.direction ) + gwWobble();
   float ramp = gwToonRamp( ndl, uGwBands, uGwSoft );
   ramp = mix( ramp, saturate( ndl ), 0.12 );
   reflectedLight.directDiffuse += ramp * directLight.color * BRDF_Lambert( material.diffuseColor );
@@ -432,6 +452,7 @@ export class Materials {
       uGwSpecPower: { value: d.specPower ?? 40 },
       uGwTrans: { value: d.translucency ?? 0 },
       uGwEdge: { value: d.edge ?? 0 },
+      uGwWobble: { value: d.wobble ?? 0.2 },
       uGwPulse: { value: d.pulse ?? 0 },
       // x amplitude (m, 0 = wind off) . y sway height (m) . z gust speed
       uGwWindCfg: { value: new Vector4(windOn ? (windObj.amp ?? 0.12) : 0, Math.max(windObj.height ?? 4, 1e-3), windObj.speed ?? 1, 0) },
@@ -477,7 +498,7 @@ export class Materials {
       fs = replaceOnce(fs, '#include <fog_fragment>', FRAG_FOG, 'fog_fragment');
       shader.fragmentShader = fs;
     };
-    m.customProgramCacheKey = () => 'gw-toon-1';
+    m.customProgramCacheKey = () => 'gw-toon-2';
 
     this.registry.add(m);
     m.addEventListener('dispose', () => this.registry.delete(m));
@@ -499,7 +520,7 @@ export class Materials {
     if ((d.translucency ?? 0) > 0) defs.GW_TRANS = '';
     if ((d.pulse ?? 0) > 0) defs.GW_PULSE = '';
     if (d.weather !== false) defs.GW_WEATHER = '';
-    if (d.cloudShadow) defs.GW_CLOUDSHADOW = '';
+    if (d.cloudShadow ?? true) defs.GW_CLOUDSHADOW = '';
     if (d.vertexColors && (d.emissive !== undefined || gw.cls === 'glow')) defs.GW_EMISSIVE_VCOLOR = '';
     if (gw.windOn) defs.GW_WIND = '';
     if (gw.bend) defs.GW_BEND = '';

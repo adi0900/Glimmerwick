@@ -15,3 +15,4 @@ Rules:
 - The tree is shared and live: keep it compiling/running; no long-lived background processes; screenshots only under `shots/<module>/r<N>/`.
 - Everything is judged by a harsh independent critic against Pokémon / Animal Crossing / Minecraft polish. Don't hide weaknesses behind camera angles or fog; fix them. Report only what you actually ran and looked at.
 - Monetization is ethical only: premium + cosmetic packs behind a parent gate; no loot boxes / timers / FOMO / ads / pay-to-win.
+- The GitHub repo (https://github.com/adi0900/Glimmerwick) is **PUBLIC**: never put secrets, tokens, personal/billing/plan info, personal absolute paths, or copyrighted reference images in tracked files. Only the orchestrator commits/pushes (`tools/push.ps1`).

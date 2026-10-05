@@ -1,7 +1,7 @@
 /**
  * Shared GLSL snippet library (owner: look; first version by foundation-web).
  *
- * Every snippet is registered in `THREE.ShaderChunk` under `gw_<name>`, so ANY material can use it:
+ * Every snippet is registered in THREE.ShaderChunk under gw_<name>, so ANY material can use it:
  *
  *     #include <gw_noise>      // gwNoise2/3, gwGradNoise3
  *     #include <gw_fbm>        // gwFbm2/3, gwFbm3Lite, gwRidge3, gwWarp3
@@ -9,11 +9,12 @@
  *     #include <gw_curl>       // gwCurl2/3
  *     #include <gw_toon>       // gwToonRamp, gwShadeColor, gwHueShift, gwSaturation, gwLuma, gwRim
  *     #include <gw_hash>       // gwHash11..33
- *     #include <gw_fog>        // gwFog(...)
+ *     #include <gw_fog>        // gwFog(...), gwFogTint(...)  (direction-dependent haze colour, matches the sky)
  *     #include <gw_paint>      // gwPaint(...) hand-painted albedo layer
+ *     #include <gw_clouds>     // gwCloudDensity(p, cover): the cloud field shared by sky + cloud shadows
  *
  * Snippets are include-guarded and include their own dependencies, so include order does not matter.
- * `registerGlsl()` is idempotent and is called by the engine before any material is created.
+ * registerGlsl() is idempotent and is called by the engine before any material is created.
  */
 import { ShaderChunk } from 'three';
 import hash from './hash.glsl?raw';
@@ -24,8 +25,9 @@ import curl from './curl.glsl?raw';
 import toon from './toon.glsl?raw';
 import fog from './fog.glsl?raw';
 import paint from './paint.glsl?raw';
+import clouds from './clouds.glsl?raw';
 
-export const GLSL = { hash, noise, fbm, worley, curl, toon, fog, paint } as const;
+export const GLSL = { hash, noise, fbm, worley, curl, toon, fog, paint, clouds } as const;
 
 let registered = false;
 

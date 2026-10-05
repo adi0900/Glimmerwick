@@ -1,0 +1,108 @@
+[
+  {
+    "id": "hero_0530",
+    "cam": "hero",
+    "time": 5.5,
+    "size": "1280x720",
+    "param": "with=_slice"
+  },
+  {
+    "id": "hero_0800",
+    "cam": "hero",
+    "time": 8,
+    "size": "1280x720",
+    "param": "with=_slice"
+  },
+  {
+    "id": "hero_1200",
+    "cam": "hero",
+    "time": 12,
+    "size": "1280x720",
+    "param": "with=_slice"
+  },
+  {
+    "id": "hero_1630",
+    "cam": "hero",
+    "time": 16.5,
+    "size": "1280x720",
+    "param": "with=_slice"
+  },
+  {
+    "id": "hero_1830",
+    "cam": "hero",
+    "time": 18.5,
+    "size": "1280x720",
+    "param": "with=_slice"
+  },
+  {
+    "id": "hero_2000",
+    "cam": "hero",
+    "time": 20,
+    "size": "1280x720",
+    "param": "with=_slice"
+  },
+  {
+    "id": "hero_2300",
+    "cam": "hero",
+    "time": 23,
+    "size": "1280x720",
+    "param": "with=_slice"
+  },
+  {
+    "id": "clouds_1630",
+    "cam": "clouds",
+    "time": 16.5,
+    "size": "1280x720",
+    "param": "with=_slice"
+  },
+  {
+    "id": "clouds_1200",
+    "cam": "clouds",
+    "time": 12,
+    "size": "1280x720",
+    "param": "with=_slice"
+  },
+  {
+    "id": "sunset_wide",
+    "cam": "sunset",
+    "time": 18.1,
+    "size": "1280x720",
+    "param": "with=_slice"
+  },
+  {
+    "id": "dawn_wide",
+    "cam": "dawn",
+    "time": 5.5,
+    "size": "1280x720",
+    "param": "with=_slice"
+  },
+  {
+    "id": "material_closeup",
+    "cam": "material",
+    "time": 16.5,
+    "size": "1280x720",
+    "param": "with=_slice"
+  },
+  {
+    "id": "player_golden",
+    "cam": "player",
+    "time": 16.5,
+    "size": "1280x720",
+    "param": "with=_slice"
+  },
+  {
+    "id": "night_sky_up",
+    "cam": "clouds",
+    "time": 23,
+    "size": "1280x720",
+    "param": "with=_slice"
+  },
+  {
+    "id": "hero_cloudy_noon",
+    "cam": "hero",
+    "time": 12,
+    "weather": "cloudy:0.8",
+    "size": "1280x720",
+    "param": "with=_slice"
+  }
+]

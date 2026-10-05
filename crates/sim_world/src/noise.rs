@@ -40,6 +40,30 @@ pub fn fbm(seed: u32, x: f32, y: f32, octaves: u32) -> f32 {
     sum / norm
 }
 
+/// fbm with a ~37 degree rotation + x2 scale per octave (hides the lattice axes), `[0, 1)`.
+/// Only IEEE-exact ops, like everything in this file.
+pub fn fbm_rot(seed: u32, x: f32, y: f32, octaves: u32, gain: f32) -> f32 {
+    let (mut x, mut y) = (x, y);
+    let mut amp = 0.5;
+    let mut sum = 0.0;
+    let mut norm = 0.0;
+    for o in 0..octaves {
+        sum += amp * value_noise(seed.wrapping_add(o.wrapping_mul(0x9E37_79B9)), x, y);
+        norm += amp;
+        amp *= gain;
+        let nx = 1.6 * x + 1.2 * y + 17.3;
+        let ny = -1.2 * x + 1.6 * y - 9.1;
+        x = nx;
+        y = ny;
+    }
+    sum / norm
+}
+
+/// Signed fbm in `(-1, 1)`.
+pub fn sn(seed: u32, x: f32, y: f32, octaves: u32) -> f32 {
+    (fbm_rot(seed, x, y, octaves, 0.5) - 0.5) * 2.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
