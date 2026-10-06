@@ -11,7 +11,8 @@
  *     #include <gw_hash>       // gwHash11..33
  *     #include <gw_fog>        // gwFog(...), gwFogTint(...)  (direction-dependent haze colour, matches the sky)
  *     #include <gw_paint>      // gwPaint(...) hand-painted albedo layer
- *     #include <gw_clouds>     // gwCloudDensity(p, cover): the cloud field shared by sky + cloud shadows
+  *     #include <gw_clouds>     // gwCloudDensity(p, cover): the cloud field shared by sky + cloud shadows
+ *     #include <gw_voxelcell>  // gwCellFade / gwCellEdge / gwCellOut: micro-voxel bevel shared by actors + world texels
  *
  * Snippets are include-guarded and include their own dependencies, so include order does not matter.
  * registerGlsl() is idempotent and is called by the engine before any material is created.
@@ -26,8 +27,9 @@ import toon from './toon.glsl?raw';
 import fog from './fog.glsl?raw';
 import paint from './paint.glsl?raw';
 import clouds from './clouds.glsl?raw';
+import voxelcell from './voxelcell.glsl?raw';
 
-export const GLSL = { hash, noise, fbm, worley, curl, toon, fog, paint, clouds } as const;
+export const GLSL = { hash, noise, fbm, worley, curl, toon, fog, paint, clouds, voxelcell } as const;
 
 let registered = false;
 

@@ -15,7 +15,7 @@
  * shared haze via `gwFog`, ripple rings).
  */
 import { Color, FrontSide, ShaderMaterial, Vector2, Vector4, type DataArrayTexture, type MeshToonMaterial } from 'three';
-import { TILE } from './atlas';
+import { TEXEL } from './atlas';
 import type { Ctx } from '../../engine/types';
 
 const VERT_PARS = /* glsl */ `
@@ -57,7 +57,38 @@ varying float vVoxSway;
 float gwBevelAmt;
 float gwWet;
 float gwShore;
+uniform vec4 uVoxCell; // texel voxel look (same numbers as the creatures' actor material): x bevel width . y bevel strength . z edge darkening . w pseudo-height tilt
 uniform float uVoxSand;
+float gwCellK;
+vec2 gwHg;
+float gwCellBt;
+#include <gw_voxelcell>
+const float GW_TX = ${TEXEL}.0;
+// face uv -> tile uv: pure 90 degree rotations + a random offset that is a whole number of texels, so the 1/16 m texel grid is
+// identical on every face / rotation / variant
+vec2 gwMapUv( vec2 uv, int face, float freeA, float freeB, float j, float j2 ) {
+  vec2 q = uv;
+  if ( face == 2 || face == 3 ) {
+    if ( freeA > 0.5 ) {
+      float rot = floor( fract( j2 * 7.0 ) * 4.0 );
+      vec2 r0 = q;
+      if ( rot < 1.0 ) q = r0;
+      else if ( rot < 2.0 ) q = vec2( 1.0 - r0.y, r0.x );
+      else if ( rot < 3.0 ) q = vec2( 1.0 - r0.x, 1.0 - r0.y );
+      else q = vec2( r0.y, 1.0 - r0.x );
+      q += floor( vec2( fract( j2 * 13.0 ), fract( j * 29.0 ) ) * GW_TX ) / GW_TX;
+    } else {
+      if ( j2 > 0.5 ) q = q.yx;
+      if ( fract( j2 * 7.0 ) > 0.5 ) q.x = 1.0 - q.x;
+      if ( fract( j2 * 13.0 ) > 0.5 ) q.y = 1.0 - q.y;
+    }
+  } else if ( freeB > 0.5 ) {
+    q.x += floor( fract( j2 * 7.0 ) * GW_TX ) / GW_TX;
+  } else if ( fract( j2 * 7.0 ) > 0.5 ) {
+    q.x = 1.0 - q.x;
+  }
+  return q;
+}
 uniform vec2 uVoxFree;
 varying vec2 vVoxUv;
 varying vec4 vVoxLight;
@@ -90,41 +121,35 @@ int gwFace = int( mod( gwTF, 8.0 ) + 0.5 );
 vec3 gwBP = floor( vGwWorld - gwVN[ gwFace ] * 0.5 );
 float gwJ = gwVoxH( gwBP );
 float gwJ2 = gwVoxH( gwBP + vec3( 11.0, 5.0, 3.0 ) );
-vec2 gwUv = vVoxUv;
 float gwFreeA = step( gwTileF, uVoxFree.x - 0.5 );
 float gwFreeB = step( gwTileF, uVoxFree.y - 0.5 );
-if ( gwFace == 2 || gwFace == 3 ) {
-  if ( gwFreeA > 0.5 ) {
-    // painted tiles: pure 90 degree rotations (never mirrored) + a random seamless offset, so no two blocks match
-    float gwRot = floor( fract( gwJ2 * 7.0 ) * 4.0 );
-    vec2 gwQ = gwUv;
-    if ( gwRot < 1.0 ) gwUv = gwQ;
-    else if ( gwRot < 2.0 ) gwUv = vec2( 1.0 - gwQ.y, gwQ.x );
-    else if ( gwRot < 3.0 ) gwUv = vec2( 1.0 - gwQ.x, 1.0 - gwQ.y );
-    else gwUv = vec2( gwQ.y, 1.0 - gwQ.x );
-    gwUv += vec2( fract( gwJ2 * 13.0 ), fract( gwJ * 29.0 ) );
-  } else {
-    if ( gwJ2 > 0.5 ) gwUv = gwUv.yx;
-    if ( fract( gwJ2 * 7.0 ) > 0.5 ) gwUv.x = 1.0 - gwUv.x;
-    if ( fract( gwJ2 * 13.0 ) > 0.5 ) gwUv.y = 1.0 - gwUv.y;
-  }
-} else if ( gwFreeB > 0.5 ) {
-  gwUv.x += fract( gwJ2 * 7.0 );
-} else if ( fract( gwJ2 * 7.0 ) > 0.5 ) {
-  gwUv.x = 1.0 - gwUv.x;
-}
+vec2 gwUv = gwMapUv( vVoxUv, gwFace, gwFreeA, gwFreeB, gwJ, gwJ2 );
 float gwLayer = gwTileF + min( floor( fract( gwJ * 91.7 ) * gwNV ), gwNV - 1.0 );
-// sharp-bilinear: texel edges stay crisp up close (1/3 texel soft), plain trilinear + anisotropic when minified;
-// explicit gradients (x0.7 = about -0.5 mip bias) keep the mips / 16x anisotropy of the ORIGINAL uv
-vec2 gwTuv = gwUv * ${TILE}.0;
+// texel voxels: every 1/16 m cell of the face is one flat colour (snapped to the texel centre) while a texel covers >= ~2 px;
+// as the texels shrink the lookup blends back to the filtered, mip-mapped colour (no shimmer, no moire in the distance)
+vec2 gwTc = vVoxUv * GW_TX;
+float gwFwT = max( fwidth( gwTc.x ), fwidth( gwTc.y ) );
+gwCellK = 1.0 - smoothstep( 0.32, 0.8, gwFwT );
+vec2 gwCell = min( floor( gwTc ), GW_TX - 1.0 );
+vec2 gwUvS = gwMapUv( ( gwCell + 0.5 ) / GW_TX, gwFace, gwFreeA, gwFreeB, gwJ, gwJ2 );
 vec2 gwDx = dFdx( gwUv );
 vec2 gwDy = dFdy( gwUv );
-vec2 gwFw = max( fwidth( gwTuv ), vec2( 0.34 ) );
-vec2 gwSt = floor( gwTuv ) + clamp( ( fract( gwTuv ) - 0.5 ) / gwFw + 0.5, 0.0, 1.0 );
-vec4 gwT = textureGrad( uBlockTiles, vec3( gwSt / ${TILE}.0, gwLayer ), gwDx * 0.7, gwDy * 0.7 );
+vec4 gwT = textureGrad( uBlockTiles, vec3( mix( gwUv, gwUvS, gwCellK ), gwLayer ), gwDx * 0.7, gwDy * 0.7 );
+// pseudo-height from texel luminance: bright texels stand proud; the gradient tilts the per-texel normal (see the bevel stage)
+gwHg = vec2( 0.0 );
+if ( gwCellK > 0.02 ) {
+  float gwHl = dot( textureLod( uBlockTiles, vec3( gwMapUv( ( clamp( gwCell + vec2( -1.0, 0.0 ), 0.0, GW_TX - 1.0 ) + 0.5 ) / GW_TX, gwFace, gwFreeA, gwFreeB, gwJ, gwJ2 ), gwLayer ), 0.0 ).rgb, vec3( 0.299, 0.587, 0.114 ) );
+  float gwHr = dot( textureLod( uBlockTiles, vec3( gwMapUv( ( clamp( gwCell + vec2( 1.0, 0.0 ), 0.0, GW_TX - 1.0 ) + 0.5 ) / GW_TX, gwFace, gwFreeA, gwFreeB, gwJ, gwJ2 ), gwLayer ), 0.0 ).rgb, vec3( 0.299, 0.587, 0.114 ) );
+  float gwHd = dot( textureLod( uBlockTiles, vec3( gwMapUv( ( clamp( gwCell + vec2( 0.0, -1.0 ), 0.0, GW_TX - 1.0 ) + 0.5 ) / GW_TX, gwFace, gwFreeA, gwFreeB, gwJ, gwJ2 ), gwLayer ), 0.0 ).rgb, vec3( 0.299, 0.587, 0.114 ) );
+  float gwHu = dot( textureLod( uBlockTiles, vec3( gwMapUv( ( clamp( gwCell + vec2( 0.0, 1.0 ), 0.0, GW_TX - 1.0 ) + 0.5 ) / GW_TX, gwFace, gwFreeA, gwFreeB, gwJ, gwJ2 ), gwLayer ), 0.0 ).rgb, vec3( 0.299, 0.587, 0.114 ) );
+  gwHg = vec2( gwHr - gwHl, gwHu - gwHd ) * 0.5 * gwCellK;
+}
+// +-4 % per-texel colour jitter (each texel is its own little cube)
+float gwTj = gwVoxH( vec3( gwCell + gwBP.xz * GW_TX, gwBP.y * GW_TX + float( gwFace ) * 3.0 ) );
+gwT.rgb *= 1.0 + ( gwTj - 0.5 ) * 0.08 * gwCellK;
 vec2 gwMp = ( gwFace == 2 || gwFace == 3 ) ? vGwWorld.xz : vec2( vGwWorld.x + vGwWorld.z, vGwWorld.y * 1.4 );
 float gwM = ( gwVoxVN( gwMp * 0.045 ) - 0.5 ) * 0.9 + ( gwVoxVN( gwMp * 0.16 + 7.3 ) - 0.5 ) * 0.5 + ( gwVoxVN( gwMp * 0.55 + 3.1 ) - 0.5 ) * 0.25;
-vec3 gwAlb = gwT.rgb * ( 0.94 + 0.12 * gwJ );
+vec3 gwAlb = gwT.rgb * ( 0.97 + 0.06 * gwJ );
 gwAlb *= 1.0 + gwM * 0.22;
 gwAlb *= vec3( 1.0 + gwM * 0.10, 1.0 + gwM * 0.02, 1.0 - gwM * 0.10 );
 float gwGr = smoothstep( 0.02, 0.25, gwAlb.g - max( gwAlb.r, gwAlb.b ) );
@@ -176,11 +201,15 @@ const FRAG_BEVEL = /* glsl */ `
   vec3 gwBn = gwVB[ gwFace ];
   vec3 gwOut = gwTn * ( b1 - b0 ) + gwBn * ( b3 - b2 );
   float gwBt = max( max( b0, b1 ), max( b2, b3 ) );
-  vec3 gwNW = normalize( gwVN[ gwFace ] + gwOut * uVox.y );
+  vec2 gwCf = fract( vVoxUv * GW_TX );
+  gwCellBt = gwCellEdge( gwCf, uVoxCell.x ) * gwCellK;
+  vec3 gwCout = gwCellOut( gwCf, gwTn, gwBn );
+  vec3 gwNW = normalize( gwVN[ gwFace ] + gwOut * uVox.y + gwCout * ( gwCellBt * uVoxCell.y ) - ( gwTn * gwHg.x + gwBn * gwHg.y ) * uVoxCell.w );
   normal = normalize( ( viewMatrix * vec4( gwNW, 0.0 ) ).xyz );
   // bevel light: soft highlight on the up / left rims, darker bottom / right rims (like a lit chamfer)
   float gwEl = dot( gwOut, normalize( vec3( -0.6, 0.75, -0.5 ) ) );
   diffuseColor.rgb *= 1.0 + ( 0.09 * clamp( gwEl, 0.0, 1.0 ) - 0.13 * clamp( -gwEl, 0.0, 1.0 ) - 0.03 * gwBt ) * ( 1.0 - gwShore );
+  diffuseColor.rgb *= 1.0 - uVoxCell.z * gwCellBt * ( 1.0 - gwShore );
   gwBevelAmt = gwBt;
 }
 `;
@@ -256,12 +285,15 @@ export function makeBlockMaterial(ctx: Ctx, tiles: DataArrayTexture, waterY: num
     wind: { amp: 0.22, speed: 1.5, attr: true },
     name: 'voxel',
   });
-  const vox = new Vector4(0.09, 0.75, waterY, 0);
+  const vox = new Vector4(0.07, 0.75, waterY, 0);
+  // same numbers as creatures/material.ts (bevel width 0.16, strength 0.5, edge darkening 0.08) + 0.9 pseudo-height tilt
+  const cell = new Vector4(0.16, 0.5, 0.08, 0.9);
   const base = material.onBeforeCompile;
   material.onBeforeCompile = (shader: any, renderer: any) => {
     base.call(material, shader, renderer);
     shader.uniforms.uBlockTiles = { value: tiles };
     shader.uniforms.uVox = { value: vox };
+    shader.uniforms.uVoxCell = { value: cell };
     shader.uniforms.uVoxFree = { value: new Vector2((tiles.userData as any).freeAll ?? 0, (tiles.userData as any).freeSide ?? 0) };
     shader.uniforms.uVoxSand = { value: (tiles.userData as any).sandLayer ?? -1 };
     shader.vertexShader = replaceOnce(shader.vertexShader, 'void main() {', VERT_PARS + '\nvoid main() {', 'vertex main');
@@ -274,7 +306,7 @@ export function makeBlockMaterial(ctx: Ctx, tiles: DataArrayTexture, waterY: num
     fs = replaceOnce(fs, '#include <opaque_fragment>', FRAG_FLOOR, 'opaque_fragment');
     shader.fragmentShader = fs;
   };
-  material.customProgramCacheKey = () => 'gw-voxel-5';
+  material.customProgramCacheKey = () => 'gw-voxel-6';
   return { material, vox };
 }
 

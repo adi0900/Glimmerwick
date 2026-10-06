@@ -8,6 +8,8 @@ import { DataArrayTexture, LinearFilter, LinearMipmapLinearFilter, RepeatWrappin
 
 /** atlas tile size (px). Procedural recipes paint at `S` = 64 and are 2x nearest-upscaled; AI tiles are native 128. */
 export const TILE = 128;
+/** texels per metre / per tile edge: every block face is TEXEL x TEXEL texels = micro-voxels of 1/TEXEL m (24 -> 4.2 cm; measured on screen: creature voxels ~3.5 cm, avatar 4 cm, so the ground matches both) */
+export const TEXEL = 24;
 const S = 64;
 type RGB = [number, number, number];
 
@@ -728,6 +730,8 @@ for (const n of Object.keys(SIDES)) VARIANTS[n] = 4;
 
 export interface Atlas {
   texture: DataArrayTexture;
+  /** the baked 16 x 16 RGBA texels of every layer (row 0 = visual top); live: re-baked when the AI tiles arrive */
+  texels: Uint8Array;
   /** first layer of each tile */
   index: Map<string, number>;
   /** number of consecutive variant layers of each tile */
@@ -807,13 +811,104 @@ export function buildAtlas(names: string[], maxAnisotropy = 8): Atlas {
       if (rgba) data.set(rgba, sl.layer * TILE * TILE * 4);
     }
   };
-  const texture = new DataArrayTexture(data, TILE, TILE, layers);
+
+  // ---- "texel-voxel" bake: the 128 px authoring layers are box-filtered down to 16 x 16 texels (1/16 m each = one creature voxel)
+  const TX = TEXEL;
+  const BK = TILE / TX;
+  const small = new Uint8Array(TX * TX * 4 * layers);
+  const bake = (): void => {
+    const acc = new Float32Array(TX * TX * 3);
+    const dev = new Float32Array(TX * TX * 3);
+    for (let l = 0; l < layers; l++) {
+      const base = l * TILE * TILE * 4;
+      let mr = 0;
+      let mg = 0;
+      let mb = 0;
+      for (let ty = 0; ty < TX; ty++) {
+        for (let tx = 0; tx < TX; tx++) {
+          let r = 0;
+          let g = 0;
+          let b = 0;
+          const y0 = Math.round(ty * BK);
+          const y1 = Math.round((ty + 1) * BK);
+          const x0 = Math.round(tx * BK);
+          const x1 = Math.round((tx + 1) * BK);
+          for (let y = y0; y < y1; y++) {
+            for (let x = x0; x < x1; x++) {
+              const i = base + (y * TILE + x) * 4;
+              r += data[i]!;
+              g += data[i + 1]!;
+              b += data[i + 2]!;
+            }
+          }
+          const n = (y1 - y0) * (x1 - x0);
+          const o = (ty * TX + tx) * 3;
+          acc[o] = r / n;
+          acc[o + 1] = g / n;
+          acc[o + 2] = b / n;
+          mr += r / n;
+          mg += g / n;
+          mb += b / n;
+        }
+      }
+      mr /= TX * TX;
+      mg /= TX * TX;
+      mb /= TX * TX;
+      const ml = 0.299 * mr + 0.587 * mg + 0.114 * mb;
+      for (let ty = 0; ty < TX; ty++) {
+        for (let tx = 0; tx < TX; tx++) {
+          // detail keeper: blend 30 % towards the sample of the 8 x 8 block that deviates most from the tile mean (flowers, pebbles,
+          // nail heads survive the 8x reduction instead of being averaged to mud)
+          const o = (ty * TX + tx) * 3;
+          let bd = -1;
+          let br = 0;
+          let bg = 0;
+          let bb = 0;
+          for (let y = Math.round(ty * BK); y < Math.round((ty + 1) * BK); y += 2) {
+            for (let x = Math.round(tx * BK); x < Math.round((tx + 1) * BK); x += 2) {
+              const i = base + (y * TILE + x) * 4;
+              const d = Math.abs(data[i]! - mr) + Math.abs(data[i + 1]! - mg) + Math.abs(data[i + 2]! - mb);
+              if (d > bd) {
+                bd = d;
+                br = data[i]!;
+                bg = data[i + 1]!;
+                bb = data[i + 2]!;
+              }
+            }
+          }
+          const k = Math.min(0.2, bd / 255);
+          dev[o] = acc[o]! * (1 - k) + br * k;
+          dev[o + 1] = acc[o + 1]! * (1 - k) + bg * k;
+          dev[o + 2] = acc[o + 2]! * (1 - k) + bb * k;
+        }
+      }
+      for (let t = 0; t < TX * TX; t++) {
+        const o = t * 3;
+        // contrast about the tile mean (+8 %), saturation (+4 %): the box filter flattened both
+        let r = ml + (dev[o]! - ml) * 1.08;
+        let g = ml + (dev[o + 1]! - ml) * 1.08;
+        let b = ml + (dev[o + 2]! - ml) * 1.08;
+        const L = 0.299 * r + 0.587 * g + 0.114 * b;
+        r = L + (r - L) * 1.04;
+        g = L + (g - L) * 1.04;
+        b = L + (b - L) * 1.04;
+        // texel row 0 of `data` is the visual top = texture t = 1: keep the same orientation in the small layer
+        const w = (l * TX * TX + t) * 4;
+        small[w] = Math.max(0, Math.min(255, Math.round(r)));
+        small[w + 1] = Math.max(0, Math.min(255, Math.round(g)));
+        small[w + 2] = Math.max(0, Math.min(255, Math.round(b)));
+        small[w + 3] = 255;
+      }
+    }
+  };
+  bake();
+  const texture = new DataArrayTexture(small, TX, TX, layers);
   texture.format = RGBAFormat;
   texture.type = UnsignedByteType;
   texture.colorSpace = SRGBColorSpace;
   texture.wrapS = texture.wrapT = RepeatWrapping;
   texture.magFilter = LinearFilter;
-  texture.minFilter = LinearMipmapLinearFilter;
+  texture.minFilter = LinearMipmapLinearFilter; // mips only matter far away: the shader snaps to exact texel centres up close
   texture.generateMipmaps = true;
   texture.anisotropy = Math.max(16, maxAnisotropy); // three clamps to the device maximum
   texture.userData.sandLayer = index.get('sand') ?? -1;
@@ -822,12 +917,16 @@ export function buildAtlas(names: string[], maxAnisotropy = 8): Atlas {
   texture.needsUpdate = true;
   texture.name = 'voxel.tiles';
   // the PNGs usually finished decoding during the wasm boot; if not, upgrade the layers in place when they arrive
-  if (loaded.size > 0) applyAi();
+  if (loaded.size > 0) {
+    applyAi();
+    bake();
+  }
   void preloadTiles().then(() => {
     if (loaded.size > 0) {
       applyAi();
+      bake();
       texture.needsUpdate = true;
     }
   });
-  return { texture, index, variants, names, layers };
+  return { texture, index, variants, names, layers, texels: small };
 }

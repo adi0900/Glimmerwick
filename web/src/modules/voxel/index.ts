@@ -11,6 +11,7 @@ import { lookState } from '../../engine/Lighting';
 import { buildAtlas } from './atlas';
 import { makeBlockMaterial, makeWaterMaterial, type BlockMaterial, type WaterMaterial } from './materials';
 import { createFx, type VoxFx } from './fx';
+import { createRelief, type Relief } from './relief';
 import { Mesher, REGION, type SolidMesh, type VoxInfo, type WaterMesh } from './mesher';
 
 interface BlockDef {
@@ -394,6 +395,7 @@ function deriveCams(ctx: Ctx): Record<string, GalleryCam> {
 }
 
 let fx: VoxFx | null = null;
+let relief: Relief | null = null;
 
 const mod = defineModule({
   name: 'voxel',
@@ -429,6 +431,7 @@ const mod = defineModule({
     const colors = new Uint8Array(256 * 3);
     for (const b of blocks as any[]) if (b.color) colors.set(b.color, b.id * 3);
     fx = createFx(root, info, flags, colors);
+    relief = createRelief(ctx, root, info, flags, blocks as unknown as { id: number; name: string; tex: string[] }[], atlas);
     const block = makeBlockMaterial(ctx, atlas.texture, -0.12);
     const water = makeWaterMaterial(ctx);
     const rw = info.ncx / 2;
@@ -486,6 +489,7 @@ const mod = defineModule({
     const s = S;
     if (!s) return;
     fx?.update(ctx, dt);
+    relief?.update(ctx, dt);
     s.block.vox.w = ctx.uniforms.uTime.value as number;
     {
       // DOF focus = distance to what the camera looks at (exact voxel hit, not the flat-ground guess); Lighting.follow reads it
