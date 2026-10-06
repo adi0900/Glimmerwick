@@ -10,7 +10,7 @@
 
 vec3 gwFogTint(vec3 fogColor, vec3 viewDir, vec3 sunDir, vec3 sunColor, float night) {
   float l = gwLuma(fogColor);
-  vec3 cool = mix(fogColor, vec3(0.34, 0.60, 1.0) * (l * 1.15), 0.72);
+  vec3 cool = mix(fogColor, vec3(0.26, 0.50, 1.0) * (l * 0.98), 0.80);
   vec2 hv = viewDir.xz;
   vec2 hs = sunDir.xz;
   float az = dot(hv, hs) / max(length(hv) * length(hs), 1e-4);   // -1 away from the sun .. 1 toward it (horizontal)

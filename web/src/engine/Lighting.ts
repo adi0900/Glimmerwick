@@ -54,10 +54,16 @@ export const lookState = {
   /** external focus hint (m), e.g. the voxel module's view-ray hit distance; 0 = none */
   hint: 0,
   grey: 0,
+  /** true sun direction (unit, may be below the horizon), its colour and 0..1 visibility (night / weather thinned) */
+  sunDir: new Vector3(0, 1, 0),
+  sunCol: new Color(1, 0.8, 0.5),
+  sunVis: 1,
 };
 
 /** altitude (m above sea level) of the main cumulus layer; the cloud-shadow pass projects through this plane */
 const CLOUD_ALT = 1500;
+/** the colour the sun light has ON surfaces at golden hour: the sky keeps the saturated bible colour, brown dirt must not turn brick red */
+const SURFACE_SUN = new Color(1.0, 0.88, 0.68);
 
 // ------------------------------------------------------------------------------------------ colour script
 
@@ -76,14 +82,14 @@ interface Key {
 }
 
 // ART_BIBLE.md §2 (start values), plus a deep-night key so the night->dawn blend starts late.
-const NIGHT: Omit<Key, 'h'> = { sun: '#8FB0FF', sunI: 0.55, zenith: '#141A48', horizon: '#2C3478', hemiSky: '#3A4590', hemiGround: '#20254F', fog: '#2A3470', fogD: 0.014, hemiI: 2.6 };
+const NIGHT: Omit<Key, 'h'> = { sun: '#B4C8FF', sunI: 0.95, zenith: '#141B52', horizon: '#3A4686', hemiSky: '#5F6CAE', hemiGround: '#2C3470', fog: '#2E3C80', fogD: 0.014, hemiI: 2.0 };
 const SCRIPT: Key[] = [
   { h: 4.0, ...NIGHT },
   { h: 5.5, sun: '#FFB48A', sunI: 1.4, zenith: '#6E7FD8', horizon: '#FFC7A8', hemiSky: '#8FA6E8', hemiGround: '#6B5B7B', fog: '#F2B9A5', fogD: 0.012, hemiI: 1.5 },
-  { h: 8.0, sun: '#FFE9C2', sunI: 2.6, zenith: '#62B0F5', horizon: '#D5EEFF', hemiSky: '#A7D2FF', hemiGround: '#8CB07A', fog: '#CFE8FF', fogD: 0.008, hemiI: 1.25 },
-  { h: 12.0, sun: '#FFF6E0', sunI: 3.2, zenith: '#4FA3F0', horizon: '#CFEAFF', hemiSky: '#9CCBFF', hemiGround: '#9BC27E', fog: '#C8E6FF', fogD: 0.006, hemiI: 1.15 },
-  { h: 16.5, sun: '#FFD08A', sunI: 2.8, zenith: '#5B9CE6', horizon: '#FFE2B8', hemiSky: '#9FB9F0', hemiGround: '#A5A06A', fog: '#FFE0B5', fogD: 0.009, hemiI: 1.3 },
-  { h: 18.5, sun: '#FF9A5A', sunI: 1.8, zenith: '#6A5FD0', horizon: '#FFA97A', hemiSky: '#8A74C8', hemiGround: '#7C5A6A', fog: '#FFB08A', fogD: 0.014, hemiI: 1.6 },
+  { h: 8.0, sun: '#FFE9C2', sunI: 2.4, zenith: '#62B0F5', horizon: '#D5EEFF', hemiSky: '#A7D2FF', hemiGround: '#8CB07A', fog: '#CFE8FF', fogD: 0.008, hemiI: 1.25 },
+  { h: 12.0, sun: '#FFF6E0', sunI: 2.5, zenith: '#4FA3F0', horizon: '#CFEAFF', hemiSky: '#9CCBFF', hemiGround: '#9BC27E', fog: '#C8E6FF', fogD: 0.006, hemiI: 1.15 },
+  { h: 16.5, sun: '#FFCB80', sunI: 3.0, zenith: '#4F90E0', horizon: '#FFD6A4', hemiSky: '#A3B6EC', hemiGround: '#B09A66', fog: '#FFD7A6', fogD: 0.009, hemiI: 1.3 },
+  { h: 18.5, sun: '#FF9A5A', sunI: 3.1, zenith: '#5E52C8', horizon: '#FFA070', hemiSky: '#7C8AD6', hemiGround: '#8A5E6A', fog: '#F9A07A', fogD: 0.013, hemiI: 1.5 },
   { h: 20.0, sun: '#C98AE6', sunI: 0.7, zenith: '#3B3F9C', horizon: '#E58AB0', hemiSky: '#5B5FB8', hemiGround: '#4A4A7A', fog: '#8C6AA0', fogD: 0.016, hemiI: 2.2 },
   { h: 23.0, ...NIGHT },
   { h: 28.0, ...NIGHT },
@@ -206,12 +212,15 @@ void main() {
 
   // ---- gradient dome: the horizon band IS the ToonLit haze colour (warm toward the sun, cool away from it)
   vec3 hor = gwFogTint( uFog, d, uSunTrue, uSunCol, uNightK );
-  vec3 mid = gwSaturation( mix( hor, uZenith, 0.68 ), 1.0 + 0.35 * ( 1.0 - uNightK ) * ( 1.0 - 0.5 * lowSun ) );
+  vec3 mid = gwSaturation( mix( hor, uZenith, 0.55 ), 1.0 + 0.55 * ( 1.0 - uNightK ) * ( 1.0 - 0.35 * lowSun ) );
   vec3 col = mix( hor, mid, smoothstep( 0.0, 0.10, hz ) );
-  col = mix( col, uZenith, smoothstep( 0.06, 0.75, hz ) );
+  col = mix( col, uZenith, smoothstep( 0.04, 0.62, hz ) );
+  // low sun: the warm glow hugs the horizon on the sun side and fades round the sky (matches the sun-lit sea below, no flat grey band)
+  float gwAz = pow( max( dot( normalize( d.xz + 1e-5 ), normalize( uSunTrue.xz + 1e-5 ) ), 0.0 ), 2.0 );
+  col += mix( hor, uSunCol, 0.5 ) * gwAz * exp( -hz * 14.0 ) * 0.55 * lowSun * sunUp * ( 1.0 - uGrey );
 
   // ---- sun aureole (broad warm glow + tight bloom); the disc itself is added after the clouds
-  float halo = pow( sd, 5.0 ) * 0.30 + pow( sd, 24.0 ) * 0.30 + pow( sd, 240.0 ) * 0.9;
+  float halo = pow( sd, 5.0 ) * 0.30 + pow( sd, 24.0 ) * 0.34 + pow( sd, 90.0 ) * 0.55 * ( 0.5 + lowSun ) + pow( sd, 240.0 ) * 0.9 + pow( sd, 2.2 ) * 0.20 * lowSun;
   vec3 glowC = mix( hor, uSunCol, 0.55 ) * 1.15;
   col = mix( col, glowC, smoothstep( 0.3, 1.0, sd ) * ( 0.2 + 0.65 * lowSun ) * sunUp * ( 1.0 - uGrey ) );
   col += uSunCol * halo * sunUp * ( 1.0 - uGrey * 0.6 );
@@ -264,10 +273,10 @@ void main() {
       float thin = ( 1.0 - dens ) * smoothstep( 0.0, 0.30, dens );
       cc += uSunCol * pow( thin, 1.3 ) * pow( sd, 4.0 ) * 3.2 * sunUp;                          // silver lining
       cc += hor * 0.10 * ( 1.0 - L );                                                            // bounce from the glowing horizon
-      vec3 nightC = mix( vec3( 0.05, 0.07, 0.17 ), vec3( 0.23, 0.28, 0.50 ), L );
+      vec3 nightC = mix( vec3( 0.05, 0.07, 0.19 ), vec3( 0.20, 0.25, 0.46 ), L ) + vec3( 0.45, 0.55, 0.95 ) * pow( thin, 1.3 ) * pow( max( dot( d, uMoon ), 0.0 ), 6.0 ) * 0.5;
       cc = mix( cc, nightC, uNightK );
       cc = mix( cc, hor, ( 1.0 - smoothstep( 0.0, 0.32, h ) ) * 0.6 );                           // aerial perspective
-      alpha = smoothstep( 0.02, 0.36, dens ) * smoothstep( 0.0, 0.10, h );
+      alpha = mix( smoothstep( 0.02, 0.36, dens ), smoothstep( 0.0, 0.75, dens ) * 0.88, uNightK ) * smoothstep( 0.02, 0.22, h );
       cloudCol = cc;
     }
   }
@@ -285,7 +294,8 @@ void main() {
 
   // ---- sun disc + moon (occluded by the clouds)
   float vis = ( 1.0 - alpha ) * ( 1.0 - uGrey * 0.7 );
-  float disc = smoothstep( 0.99945, 0.99978, sd ) * sunUp;
+  float discR = mix( 0.99955, 0.9990, lowSun );
+  float disc = smoothstep( discR, discR + 0.00033, sd ) * sunUp;
   col += uSunCol * disc * 9.0 * vis;
   float md = max( dot( d, uMoon ), 0.0 );
   float moonUp = smoothstep( -0.05, 0.08, uMoon.y );
@@ -363,13 +373,13 @@ export class Lighting {
     shadowBias: -0.0003,
     shadowNormalBias: 0.045,
     /** day multipliers on the colour-script intensities (calibrated so shadows read ~45 % of lit) */
-    sunScale: 0.72,
-    hemiScale: 2.0,
+    sunScale: 1.5,
+    hemiScale: 1.5,
     /** night multipliers (moonlight must stay readable: night is beautiful, not dark) */
-    nightSun: 2.3,
-    nightHemi: 2.2,
+    nightSun: 1.3,
+    nightHemi: 1.0,
     /** the art-bible fog densities assume a tighter scene; this scales them for a 300 m island */
-    fogScale: 0.09,
+    fogScale: 0.07,
     /** peak strength of the drifting cloud shadows on the ground (0 = off) */
     cloudShadow: 0.34,
   };
@@ -407,6 +417,8 @@ export class Lighting {
   ) {
     this.q = quality;
     renderer.shadowMap.type = PCFShadowMap;
+    // the TRUE sun direction (the key light swaps to the moon at dusk, so its azimuth flips): fog / haze tint must follow the sun the sky shows
+    (u as any).uSunTrue = (u as any).uSunTrue ?? { value: new Vector3(0, 1, 0) };
 
     this.sun = new SunLight(0xfff0d0, 3);
     this.sun.name = 'gw.sun';
@@ -565,6 +577,7 @@ export class Lighting {
     grade(fg, w.dark * 0.7);
     u.uSunColor.value.copy(f.sun);
     u.uSunDir.value.copy(this.keyDir);
+    (u as any).uSunTrue.value.copy(sunDir);
     const T = this.tuning;
     const sunMul = T.sunScale + (T.nightSun - T.sunScale) * night;
     const hemiMul = T.hemiScale + (T.nightHemi - T.hemiScale) * night;
@@ -581,10 +594,11 @@ export class Lighting {
     u.uWind.value.set(env.windX, env.windZ);
 
     // ---- lights
-    this.sun.color.copy(f.sun);
+    const gold = (1 - smoothstep(0.12, 0.8, sunDir.y)) * smoothstep(-0.14, 0.04, sunDir.y);
+    this.sun.color.copy(f.sun).lerp(SURFACE_SUN, 0.5 * gold * (1 - night));
     this.sun.intensity = sunI;
     this.sun.position.copy(this.keyDir).multiplyScalar(100);
-    this.sun.shadow.intensity = 1 - 0.3 * night;
+    this.sun.shadow.intensity = 1 - 0.1 * night;
     this.hemi.color.copy(hs);
     this.hemi.groundColor.copy(hg);
     this.hemi.intensity = f.hemiI * hemiMul * (1 + 0.15 * w.cover);
@@ -616,6 +630,9 @@ export class Lighting {
     lookState.sunElev = sunDir.y;
     lookState.golden = (1 - smoothstep(0.12, 0.8, sunDir.y)) * smoothstep(-0.14, 0.04, sunDir.y);
     lookState.grey = w.grey;
+    lookState.sunDir.copy(sunDir);
+    lookState.sunCol.copy(f.sun);
+    lookState.sunVis = dayW * w.sunK;
 
     this.lastDt = dt;
     this.lastSnap = snap;

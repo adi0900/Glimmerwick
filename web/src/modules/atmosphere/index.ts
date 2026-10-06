@@ -11,6 +11,7 @@
  *   - `ctx.api.atmosphere`: the shared cloud-field state (drift / cover / altitude) for weather / fx modules
  *   - (round 2+) weather particles, fireflies, lightning
  */
+import { AdditiveBlending, BufferAttribute, BufferGeometry, Points, ShaderMaterial } from 'three';
 import type { Ctx, GalleryCam, Vec3 } from '../../engine/types';
 import { defineModule } from '../../engine/types';
 
@@ -90,11 +91,76 @@ function aim(ctx: Ctx): void {
   (window as any).__game?.setCam?.(cam);
 }
 
+// ---- fireflies: a few dozen soft glowing motes around the player at night (all motion in the vertex shader: zero CPU per frame)
+const FF_N = 48;
+const FF_VERT = /* glsl */ `
+attribute vec3 aSeed;
+uniform float uTime;
+uniform float uNight;
+uniform vec3 uPlayer;
+varying float vA;
+void main() {
+  vec3 s = aSeed;
+  float t = uTime * ( 0.18 + s.z * 0.22 );
+  vec2 base = ( s.xy - 0.5 ) * 40.0;
+  vec2 o = base + vec2( sin( t * 1.7 + s.x * 40.0 ), cos( t * 1.3 + s.y * 40.0 ) ) * 2.4;
+  vec3 p = vec3( uPlayer.x + o.x, uPlayer.y + 0.45 + s.z * 2.4 + sin( t * 3.1 + s.y * 20.0 ) * 0.35, uPlayer.z + o.y );
+  vec4 mv = modelViewMatrix * vec4( p, 1.0 );
+  gl_Position = projectionMatrix * mv;
+  float blink = pow( 0.5 + 0.5 * sin( uTime * ( 1.1 + s.x * 1.6 ) + s.y * 31.0 ), 2.5 );
+  vA = ( 0.25 + 0.75 * blink ) * uNight;
+  gl_PointSize = clamp( 300.0 / max( -mv.z, 2.0 ), 3.0, 22.0 );
+}
+`;
+const FF_FRAG = /* glsl */ `
+precision highp float;
+varying float vA;
+void main() {
+  float d = length( gl_PointCoord - 0.5 ) * 2.0;
+  float core = smoothstep( 1.0, 0.0, d );
+  float a = core * core * vA;
+  if ( a < 0.004 ) discard;
+  gl_FragColor = vec4( vec3( 1.0, 0.86, 0.40 ) * ( a * 2.6 ), a );
+}
+`;
+
+function makeFireflies(ctx: Ctx): void {
+  const geo = new BufferGeometry();
+  const seeds = new Float32Array(FF_N * 3);
+  let h = 12345;
+  const rnd = (): number => {
+    h = (Math.imul(h, 1664525) + 1013904223) >>> 0;
+    return h / 4294967296;
+  };
+  for (let i = 0; i < seeds.length; i++) seeds[i] = rnd();
+  geo.setAttribute('position', new BufferAttribute(new Float32Array(FF_N * 3), 3));
+  geo.setAttribute('aSeed', new BufferAttribute(seeds, 3));
+  const mat = new ShaderMaterial({
+    uniforms: { uTime: ctx.uniforms.uTime, uNight: ctx.uniforms.uNight, uPlayer: ctx.uniforms.uPlayerPos },
+    vertexShader: FF_VERT,
+    fragmentShader: FF_FRAG,
+    transparent: true,
+    depthWrite: false,
+    blending: AdditiveBlending,
+    fog: false,
+  });
+  const pts = new Points(geo, mat);
+  pts.name = 'gw.fireflies';
+  pts.frustumCulled = false;
+  pts.renderOrder = 10;
+  ctx.scene.add(pts);
+}
+
 export default defineModule({
   name: 'atmosphere',
   order: 5,
   init(ctx) {
     ctx.api.atmosphere = { cloud: ctx.lighting.cloud };
+    try {
+      makeFireflies(ctx);
+    } catch (e) {
+      console.warn('[atmosphere] fireflies disabled', e);
+    }
     ctx.debug.line('clouds', () => `cover ${ctx.lighting.cloud.cover.toFixed(2)} drift ${ctx.lighting.cloud.drift.x.toFixed(0)},${ctx.lighting.cloud.drift.y.toFixed(0)}`);
   },
   update(ctx) {

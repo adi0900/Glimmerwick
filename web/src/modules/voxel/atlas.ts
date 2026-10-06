@@ -151,11 +151,11 @@ class Img {
 
 // ------------------------------------------------------------------------------------------------- recipes
 
-const MEADOW = ['#3FA65A', '#5CC95A', '#8FDB62', '#C6E86A'].map(hx) as RGB[];
-const FOREST = ['#2A7F55', '#3E9E5E', '#63B867', '#9AD477'].map(hx) as RGB[];
+const MEADOW = ['#46A05A', '#66BB58', '#98D464', '#CBE673'].map(hx) as RGB[];
+const FOREST = ['#34804F', '#4A9F58', '#72BA66', '#A6D678'].map(hx) as RGB[];
 const HIGH = ['#86B055', '#B0D066', '#D2DE66', '#EAF08A'].map(hx) as RGB[];
 
-function dirtFill(im: Img, s = 1, base = hx('#A58250'), dark = hx('#866438'), light = hx('#C8A468')): void {
+function dirtFill(im: Img, s = 1, base = hx('#9C7C58'), dark = hx('#7A5E3E'), light = hx('#BE9C6C')): void {
   im.fill((u, v) => {
     const n = fbm(u, v, 4, 3, s);
     const c = mixc(mixc(dark, base, sstep(0.25, 0.6, n)), light, sstep(0.6, 0.85, fbm(u, v, 9, 2, s + 4)) * 0.7);
@@ -268,9 +268,9 @@ const PAINT: Record<string, (im: Img) => void> = {
     }
   },
   dirt: (im) => dirtFill(im, 7),
-  stone_cool: (im) => stone(im, hx('#8E81A8'), hx('#A89CBF'), hx('#C4BAD6'), 11),
+  stone_cool: (im) => stone(im, hx('#968BA6'), hx('#AEA4BC'), hx('#C9C0D3'), 11),
   stone_warm: (im) => stone(im, hx('#A98B72'), hx('#C9A98C'), hx('#E2C8AC'), 12),
-  stone_dark: (im) => stone(im, hx('#54456A'), hx('#6C5B7B'), hx('#877699'), 13),
+  stone_dark: (im) => stone(im, hx('#6A5C76'), hx('#82738C'), hx('#9F90A6'), 13),
   sand: (im) => {
     im.fill((u, v) => {
       let c = mixc(hx('#F2D56E'), hx('#FFEFA6'), sstep(0.2, 0.7, fbm(u, v, 5, 3, 21)));
@@ -346,7 +346,7 @@ const PAINT: Record<string, (im: Img) => void> = {
     });
   },
   leaves_oak: (im) => leaves(im, ['#2D7A45', '#4DB85A', '#8FDC6A', '#C8F08A'].map(hx), 131),
-  leaves_pine: (im) => leaves(im, ['#1F5F4A', '#2F8A66', '#5DB88A', '#9AE0B4'].map(hx), 132, undefined, true),
+  leaves_pine: (im) => leaves(im, ['#2A6244', '#3C8A56', '#68B873', '#A2DE9C'].map(hx), 132, undefined, true),
   leaves_blossom: (im) => leaves(im, ['#E0699A', '#FF8FBE', '#FFC2DA', '#FFF0F6'].map(hx), 133, { c: hx('#FFF7F0'), n: 12, r: 1.7 }),
   leaves_birch: (im) => leaves(im, ['#78A83A', '#A5D14E', '#CDE86A', '#EAF59A'].map(hx), 134),
   leaves_maple: (im) => leaves(im, ['#A8402A', '#CC6A34', '#E6933F', '#F6C677'].map(hx), 135),

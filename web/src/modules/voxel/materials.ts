@@ -19,6 +19,7 @@ import type { Ctx } from '../../engine/types';
 
 const VERT_PARS = /* glsl */ `
 attribute float aTF;
+varying float vVoxSway;
 attribute vec4 aLight;
 varying vec2 vVoxUv;
 varying vec4 vVoxLight;
@@ -32,12 +33,15 @@ const VERT_MAIN = /* glsl */ `
   vVoxUv = vec2( ( gwc == 1 || gwc == 2 ) ? 1.0 : 0.0, ( gwc >= 2 ) ? 1.0 : 0.0 );
   vVoxLight = aLight;
   vVoxTF = aTF;
+  vVoxSway = aSway;
 }
 `;
 
 const FRAG_PARS = /* glsl */ `
 uniform highp sampler2DArray uBlockTiles;
 uniform vec4 uVox; // x bevel width . y bevel strength . z water surface y (m) . w time
+varying float vVoxSway;
+float gwBevelAmt;
 varying vec2 vVoxUv;
 varying vec4 vVoxLight;
 flat varying float vVoxTF;
@@ -83,6 +87,10 @@ float gwM = ( gwVoxVN( vGwWorld.xz * 0.045 ) - 0.5 ) * 0.9 + ( gwVoxVN( vGwWorld
 vec3 gwAlb = gwT.rgb * ( 0.94 + 0.12 * gwJ );
 gwAlb *= 1.0 + gwM * 0.22;
 gwAlb *= vec3( 1.0 + gwM * 0.10, 1.0 + gwM * 0.02, 1.0 - gwM * 0.10 );
+float gwGr = smoothstep( 0.02, 0.25, gwAlb.g - max( gwAlb.r, gwAlb.b ) );
+gwAlb = mix( gwAlb, vec3( gwLuma( gwAlb ) ), 0.14 * gwGr );
+gwAlb.r *= 1.0 + 0.10 * gwGr;
+gwAlb.b *= 1.0 - 0.10 * gwGr;
 float gwAoMin = ( gwFace == 2 || gwFace == 3 ) ? 0.58 : 0.76;
 float gwAOv = mix( gwAoMin, 1.0, vVoxLight.x );
 float gwSkyv = mix( 0.64, 1.0, vVoxLight.y );
@@ -102,6 +110,7 @@ if ( gwDepthM > 0.0 ) {
 const FRAG_BEVEL = /* glsl */ `
 #include <normal_fragment_maps>
 {
+  gwBevelAmt = 0.0;
   int gwBits = int( vVoxLight.w * 255.0 + 0.5 );
   float gwBw = uVox.x;
   float s0 = ( ( gwBits & 1 ) != 0 ) ? 1.0 : ( ( gwBits & 16 ) != 0 ? 0.3 : 0.0 );
@@ -119,6 +128,7 @@ const FRAG_BEVEL = /* glsl */ `
   vec3 gwNW = normalize( gwVN[ gwFace ] + gwOut * uVox.y );
   normal = normalize( ( viewMatrix * vec4( gwNW, 0.0 ) ).xyz );
   diffuseColor.rgb *= 1.0 - 0.10 * gwBt;
+  gwBevelAmt = gwBt;
 }
 `;
 
@@ -134,7 +144,28 @@ if ( vVoxLight.z > 0.75 ) {
 `;
 
 const FRAG_FLOOR = /* glsl */ `
-outgoingLight = max( outgoingLight, diffuseColor.rgb * vec3( 0.46, 0.41, 0.62 ) * mix( 1.0, 0.45, uNight ) + vec3( 0.03, 0.025, 0.05 ) * mix( 1.0, 0.4, uNight ) );
+{
+  // sky-lit look: sun-catch on bevelled edges, back-lit foliage, filtered bounce under canopies, moon-lit tops
+  vec3 gwSunN = normalize( uSunDir );
+  float gwDay = 1.0 - uNight;
+  float gwSunFace = saturate( dot( gwWN, gwSunN ) );
+  outgoingLight += uSunColor * diffuseColor.rgb * ( gwBevelAmt * gwSunFace * 0.35 ) * gwDay;
+  float gwLeaf = smoothstep( 0.02, 0.30, vVoxSway );
+  vec3 gwToCam = normalize( cameraPosition - vGwWorld );
+  float gwToSun = pow( saturate( dot( -gwToCam, gwSunN ) ), 2.0 );
+  float gwBacklit = gwLeaf * ( 0.10 + 0.60 * gwToSun ) * saturate( 0.75 - 0.5 * dot( gwWN, gwSunN ) );
+  outgoingLight += diffuseColor.rgb * uSunColor * vec3( 1.2, 1.1, 0.55 ) * ( gwBacklit * 0.55 ) * gwDay;
+  float gwCanopy = 1.0 - vVoxLight.y;
+  outgoingLight += diffuseColor.rgb * vec3( 0.26, 0.30, 0.11 ) * gwCanopy * gwDay * ( 0.35 + 0.65 * saturate( uSunDir.y * 2.0 ) );
+  outgoingLight += ( diffuseColor.rgb * vec3( 0.12, 0.16, 0.30 ) + vec3( 0.014, 0.018, 0.030 ) ) * saturate( gwWN.y ) * uNight * 0.9;
+}
+{
+  // cool, saturated shadows: skylight scattered into shade is violet-blue and does not depend on the albedo (a green lawn must not go black-green)
+  float gwLitAmt = saturate( dot( reflectedLight.directDiffuse, vec3( 0.333 ) ) * 4.0 );
+  outgoingLight += vec3( 0.014, 0.026, 0.050 ) * ( 1.0 - gwLitAmt ) * mix( 1.0, 0.6, uNight );
+  outgoingLight += vec3( 0.008, 0.011, 0.028 ) * uNight;
+}
+outgoingLight = max( outgoingLight, diffuseColor.rgb * vec3( 0.25, 0.24, 0.30 ) * mix( 1.0, 0.8, uNight ) + vec3( 0.004, 0.005, 0.012 ) );
 #include <opaque_fragment>
 `;
 
@@ -159,7 +190,9 @@ export function makeBlockMaterial(ctx: Ctx, tiles: DataArrayTexture, waterY: num
     paint: 0,
     wobble: 0,
     edge: 0,
-    rim: 0.1,
+    rim: 0.22,
+    wrap: 0.5,
+    shadeTint: '#A9B8F0',
     shade: 0.5,
     bands: 4,
     softness: 0.16,
@@ -184,7 +217,7 @@ export function makeBlockMaterial(ctx: Ctx, tiles: DataArrayTexture, waterY: num
     fs = replaceOnce(fs, '#include <opaque_fragment>', FRAG_FLOOR, 'opaque_fragment');
     shader.fragmentShader = fs;
   };
-  material.customProgramCacheKey = () => 'gw-voxel-2';
+  material.customProgramCacheKey = () => 'gw-voxel-3';
   return { material, vox };
 }
 
@@ -203,6 +236,7 @@ void main() {
 const WATER_FRAG = /* glsl */ `
 uniform float uTime;
 uniform vec3 uSunDir;
+uniform vec3 uSunTrue;
 uniform vec3 uSunColor;
 uniform vec3 uSkyZenith;
 uniform vec3 uSkyHorizon;
@@ -246,7 +280,7 @@ void main() {
   vec2 gh = wg( p, normalize( vec2( -1.0, -0.25 ) ), 3.3, 2.6, 0.03 )
           + wg( p, normalize( vec2( 0.1, 1.0 ) ), 6.1, 3.4, 0.018 );
   // the fine waves fade out with distance (no moire on the far sea)
-  vec2 g = gl / ( 1.0 + dist * 0.02 ) + gh * exp( -dist * 0.03 );
+  vec2 g = gl * exp( -dist * 0.016 ) / ( 1.0 + dist * 0.04 ) + gh * exp( -dist * 0.040 );
   for ( int i = 0; i < 8; i++ ) {
     vec4 r = uRipples[ i ];
     float age = uTime - r.z;
@@ -265,12 +299,14 @@ void main() {
   float sunUp = clamp( uSunDir.y, 0.0, 1.0 );
   body *= mix( 0.32, 1.0, smoothstep( 0.0, 0.5, sunUp ) ) * mix( 1.0, 0.6, uNight );
   float ndv = clamp( dot( n, V ), 0.0, 1.0 );
-  float fres = 0.03 + 0.97 * pow( 1.0 - ndv, 4.0 );
+  float fres = 0.03 + 0.62 * pow( 1.0 - ndv, 4.0 );
   vec3 R = reflect( -V, n );
-  vec3 sky = mix( uSkyHorizon, uSkyZenith, pow( clamp( R.y, 0.0, 1.0 ), 0.55 ) );
+  // grazing reflection = the SAME haze tint the sky dome / terrain fog use (no sea-vs-sky seam at the horizon)
+  vec3 skyH = gwFogTint( uFogColor, normalize( vec3( R.x, 0.001, R.z ) ), uSunTrue, uSunColor, uNight );
+  vec3 sky = mix( mix( skyH, uSkyZenith, 0.2 ), uSkyZenith, pow( clamp( R.y, 0.0, 1.0 ), 0.55 ) );
   vec3 H = normalize( V + uSunDir );
   float nh = clamp( dot( n, H ), 0.0, 1.0 );
-  float spec = pow( nh, 260.0 ) * 3.0 + pow( nh, 28.0 ) * 0.12;
+  float spec = min( pow( nh, 260.0 ) * 3.0, 1.15 ) + pow( nh, 28.0 ) * 0.12;
   vec3 refl = sky;
   if ( R.y > 0.02 && fres > 0.05 ) {
     vec4 rh = gwRefl( vWorld, R );
@@ -288,7 +324,8 @@ void main() {
   float alpha = mix( 0.30, 0.97, smoothstep( 0.0, 4.5, d ) );
   alpha = max( alpha, fres );
   alpha = max( alpha, foam * 0.9 );
-  col = gwFog( col, dist, vWorld.y, -V, uFogColor, uFogDensity, uSunDir, uSunColor, uNight );
+  col = gwFog( col, dist, vWorld.y, -V, uFogColor, uFogDensity, uSunTrue, uSunColor, uNight );
+  col = mix( col, gwFogTint( uFogColor, -V, uSunTrue, uSunColor, uNight ), smoothstep( 1200.0, 4500.0, dist ) );   // the far ocean IS the horizon haze: no sea/sky seam
   gl_FragColor = vec4( col, alpha );
 }
 `;
@@ -305,6 +342,7 @@ export function makeWaterMaterial(ctx: Ctx): WaterMaterial {
     uniforms: {
       uTime: u.uTime,
       uSunDir: u.uSunDir,
+      uSunTrue: (u as any).uSunTrue,
       uSunColor: u.uSunColor,
       uSkyZenith: u.uSkyZenith,
       uSkyHorizon: u.uSkyHorizon,

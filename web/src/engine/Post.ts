@@ -28,6 +28,7 @@ import {
   ShaderMaterial,
   UnsignedByteType,
   Vector2,
+  Vector3,
   WebGLRenderTarget,
   NoToneMapping,
   NeutralToneMapping,
@@ -76,10 +77,11 @@ uniform float uContrast;
 uniform vec3 uFloor;
 uniform vec3 uShadowTint;
 uniform vec3 uHighTint;
+uniform float uGain;
 void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
   vec3 c = inputColor.rgb;
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
-  c = mix(vec3(l), c, uSat);
+  c = mix(vec3(l), c, uSat) * uGain;
   // split-tone: cool saturated shadows, warm lights (the first-party toy-light tell)
   c *= mix(uShadowTint, uHighTint, smoothstep(0.04, 0.7, l));
   // gentle contrast around mid grey (display-referred after tone mapping)
@@ -108,6 +110,7 @@ class GradeEffect extends Effect {
         ['uFloor', new Uniform(new Color(0.018, 0.012, 0.042))],
         ['uShadowTint', new Uniform(new Color(0.95, 0.965, 1.07))],
         ['uHighTint', new Uniform(new Color(1.03, 1.0, 0.97))],
+        ['uGain', new Uniform(1.0)],
       ]),
     });
   }
@@ -251,6 +254,92 @@ class OutlineEffect extends Effect {
 }
 
 // ------------------------------------------------------------------------------------------ AO
+
+// ------------------------------------------------------------------------------------------ Sun shafts + sun-side veil
+
+function sstep(a: number, b: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
+const SHAFT_FRAG = /* glsl */ `
+uniform vec2 uSunUv;
+uniform vec3 uSunTint;
+uniform vec3 uCamF;
+uniform vec3 uCamR;
+uniform vec3 uCamU;
+uniform vec2 uTanHalf;
+uniform vec3 uSunW;
+uniform float uShaft;
+uniform float uVeil;
+uniform float uShNear;
+uniform float uShFar;
+
+float gwShIgn(vec2 p) {
+  return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
+vec3 gwShDir(vec2 p) {
+  return normalize(uCamF + (p.x * 2.0 - 1.0) * uTanHalf.x * uCamR + (p.y * 2.0 - 1.0) * uTanHalf.y * uCamU);
+}
+float gwShLin(float d) {
+  float z = d * 2.0 - 1.0;
+  return 2.0 * uShNear * uShFar / (uShFar + uShNear - z * (uShFar - uShNear));
+}
+
+void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
+  vec3 c = inputColor.rgb;
+  if (uShaft > 0.001) {
+    const int N = 16;
+    vec2 stp = (uSunUv - uv) * (0.96 / float(N));
+    vec2 p = uv + stp * gwShIgn(gl_FragCoord.xy);
+    float acc = 0.0;
+    float w = 1.0;
+    float ws = 0.0;
+    for (int i = 0; i < N; i++) {
+      vec2 pc = clamp(p, vec2(0.003), vec2(0.997));
+      float sky = step(0.99999, readDepth(pc));
+      float g = pow(max(dot(gwShDir(pc), uSunW), 0.0), 12.0);
+      acc += sky * g * w;
+      ws += w;
+      w *= 0.95;
+      p += stp;
+    }
+    c += uSunTint * ((acc / ws) * uShaft * 2.4);
+  }
+  if (uVeil > 0.001 && depth < 0.99999) {
+    float sd = max(dot(gwShDir(uv), uSunW), 0.0);
+    float dd = gwShLin(depth);
+    float z = smoothstep(30.0, 420.0, dd) * (1.0 - smoothstep(500.0, 1300.0, dd));
+    c += uSunTint * (pow(sd, 5.0) * z * uVeil);
+  }
+  outputColor = vec4(c, inputColor.a);
+}
+`;
+
+class ShaftEffect extends Effect {
+  constructor() {
+    super('ShaftEffect', SHAFT_FRAG, {
+      blendFunction: BlendFunction.SRC,
+      attributes: EffectAttribute.DEPTH,
+      uniforms: new Map<string, Uniform>([
+        ['uSunUv', new Uniform(new Vector2(0.5, 0.8))],
+        ['uSunTint', new Uniform(new Color(1, 0.8, 0.5))],
+        ['uCamF', new Uniform(new Vector3(0, 0, -1))],
+        ['uCamR', new Uniform(new Vector3(1, 0, 0))],
+        ['uCamU', new Uniform(new Vector3(0, 1, 0))],
+        ['uTanHalf', new Uniform(new Vector2(1, 0.5))],
+        ['uSunW', new Uniform(new Vector3(0, 1, 0))],
+        ['uShaft', new Uniform(0)],
+        ['uVeil', new Uniform(0)],
+        ['uShNear', new Uniform(0.15)],
+        ['uShFar', new Uniform(1500)],
+      ]),
+    });
+  }
+  u<T = number>(name: string): Uniform<T> {
+    return this.uniforms.get(name) as Uniform<T>;
+  }
+}
 
 const FULLSCREEN_VERT = /* glsl */ `
 varying vec2 vUv;
@@ -510,12 +599,17 @@ export class Post {
   ao: AOPass | null = null;
   aoComposite: AOCompositeEffect | null = null;
   outline: OutlineEffect | null = null;
+  /** radial light shafts + warm sun-side veil (low sun only) */
+  shafts: ShaftEffect | null = null;
+  private readonly vR = new Vector3();
+  private readonly vU = new Vector3();
+  private readonly vF = new Vector3();
 
   /** tweakables (applied on build and live through `apply()`) */
   params = {
     toneMapping: 'neutral' as ToneMapName,
-    bloomIntensity: 0.5,
-    bloomThreshold: 0.95,
+    bloomIntensity: 0.62,
+    bloomThreshold: 0.92,
     bloomSmoothing: 0.35,
     bloomRadius: 0.8,
     aoRadius: 0.9,
@@ -531,7 +625,7 @@ export class Post {
     dofMaxCoc: 6,
     /** coloured, distance-faded silhouette outlines (0 = off) */
     outline: 0.55,
-    saturation: 1.14,
+    saturation: 1.0,
     contrast: 1.07,
   };
 
@@ -566,7 +660,7 @@ export class Post {
     const q = this.q;
     for (const p of c.passes) p.dispose();
     c.removeAllPasses();
-    this.bloom = this.tilt = this.tone = this.grade = this.aoComposite = this.outline = null;
+    this.bloom = this.tilt = this.tone = this.grade = this.aoComposite = this.outline = this.shafts = null;
     this.ao = null;
     c.multisampling = Math.min(q.msaa, this.msaaMax);
 
@@ -585,6 +679,8 @@ export class Post {
       fx.push(this.aoComposite);
     }
     if (q.detail >= 1) {
+      this.shafts = new ShaftEffect();
+      fx.push(this.shafts);
       this.outline = new OutlineEffect();
       fx.push(this.outline);
     }
@@ -656,10 +752,49 @@ export class Post {
     if (this.grade) {
       const warm = L.golden;
       const night = L.night;
-      this.grade.u<Color>('uHighTint').value.setRGB(1.03 + 0.07 * warm, 1.0 + 0.02 * warm, 0.97 - 0.10 * warm + 0.07 * night);
-      this.grade.u<Color>('uShadowTint').value.setRGB(0.95 - 0.04 * night, 0.965 - 0.01 * night, 1.07 + 0.07 * night);
-      this.grade.u('uSat').value = this.params.saturation + 0.05 * warm + 0.04 * night - 0.15 * L.grey;
+      this.grade.u<Color>('uHighTint').value.setRGB(1.03 + 0.10 * warm, 1.0 + 0.025 * warm, 0.97 - 0.14 * warm + 0.07 * night);
+      this.grade.u<Color>('uShadowTint').value.setRGB(0.95 - 0.10 * night - 0.02 * warm, 0.965 - 0.05 * night - 0.035 * warm, 1.07 + 0.14 * night + 0.05 * warm);
+      this.grade.u('uGain').value = 1.0 + 0.10 * night + 0.03 * warm;
+      this.grade.u('uSat').value = this.params.saturation + 0.05 * warm - 0.28 * night - 0.15 * L.grey;
     }
+  }
+
+  /** sun position on screen + strengths for the shaft / veil effect (low sun, sun roughly in front of the camera) */
+  private syncShafts(): void {
+    const s = this.shafts;
+    if (!s) return;
+    const L = lookState;
+    const cam = this.camera;
+    cam.updateMatrixWorld();
+    const e = cam.matrixWorld.elements;
+    const r = this.vR.set(e[0]!, e[1]!, e[2]!);
+    const u = this.vU.set(e[4]!, e[5]!, e[6]!);
+    const f = this.vF.set(-e[8]!, -e[9]!, -e[10]!);
+    const tanH = Math.tan((cam.fov * Math.PI) / 360);
+    const asp = cam.aspect;
+    const sun = L.sunDir;
+    const df = f.dot(sun);
+    let sx = 0.5;
+    let sy = 0.5;
+    if (df > 0.02) {
+      sx = 0.5 + (0.5 * sun.dot(r)) / df / (tanH * asp);
+      sy = 0.5 + (0.5 * sun.dot(u)) / df / tanH;
+    }
+    const low = 1 - sstep(0.3, 0.52, L.sunElev);
+    const up = sstep(-0.02, 0.06, L.sunElev);
+    const front = sstep(0.04, 0.4, df);
+    const vis = L.sunVis * (1 - L.grey);
+    s.u('uShaft').value = 0.3 * low * up * front * vis;
+    s.u('uVeil').value = 0.17 * L.golden * vis;
+    s.u<Vector2>('uSunUv').value.set(sx, sy);
+    s.u<Vector3>('uCamF').value.copy(f);
+    s.u<Vector3>('uCamR').value.copy(r);
+    s.u<Vector3>('uCamU').value.copy(u);
+    s.u<Vector2>('uTanHalf').value.set(tanH * asp, tanH);
+    s.u<Vector3>('uSunW').value.copy(sun);
+    s.u<Color>('uSunTint').value.copy(L.sunCol);
+    s.u('uShNear').value = cam.near;
+    s.u('uShFar').value = cam.far;
   }
 
   setToneMapping(name: ToneMapName): void {
@@ -686,6 +821,7 @@ export class Post {
       return;
     }
     this.sync();
+    this.syncShafts();
     this.composer.render(dt);
   }
 

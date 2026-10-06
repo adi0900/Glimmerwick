@@ -71,6 +71,8 @@ export interface ToonOptions {
   shadeTint?: ColorRepresentation;
   /** rim strength 0.15..0.35 */
   rim?: number;
+  /** wrapped diffuse: the key light reaches faces turned up to ~acos(-wrap) away (0 = plain Lambert, 0.3..0.6 = toy light) */
+  wrap?: number;
   rimPower?: number;
   rimColor?: ColorRepresentation;
   /** stylised specular strength (lacquer) */
@@ -96,6 +98,8 @@ export interface ToonOptions {
   name?: string;
 }
 
+/** default diffuse wrap per class: tops stay lit at golden hour, so cast shadows read on the ground (not just ambient) */
+const WRAP: Record<ToonClass, number> = { clay: 0.3, foliage: 0.35, stone: 0.2, wood: 0.25, lacquer: 0.25, glow: 0, ground: 0.4 };
 const LAVENDER = new Color('#B7B0F0');
 const COOL = new Color('#A9B6F2');
 const WARM_RIM = new Color('#FFD7A0');
@@ -214,6 +218,7 @@ uniform vec3 uGwShadeTint;
 uniform float uGwBands;
 uniform float uGwSoft;
 uniform float uGwRim;
+uniform float uGwWrap;
 uniform float uGwRimPower;
 uniform vec3 uGwRimColor;
 uniform float uGwSpec;
@@ -224,6 +229,7 @@ uniform float uGwWobble;
 uniform float uGwPulse;
 uniform float uTime;
 uniform vec3 uSunDir;
+uniform vec3 uSunTrue;
 uniform vec3 uSunColor;
 uniform float uNight;
 uniform vec3 uFogColor;
@@ -265,7 +271,8 @@ struct ToonMaterial {
 };
 
 void RE_Direct_Toon( const in IncidentLight directLight, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in ToonMaterial material, inout ReflectedLight reflectedLight ) {
-  float ndl = dot( geometryNormal, directLight.direction ) + gwWobble();
+  float ndl0 = dot( geometryNormal, directLight.direction ) + gwWobble();
+  float ndl = ( ndl0 + uGwWrap ) / ( 1.0 + uGwWrap );
   float ramp = gwToonRamp( ndl, uGwBands, uGwSoft );
   ramp = mix( ramp, saturate( ndl ), 0.12 );
   reflectedLight.directDiffuse += ramp * directLight.color * BRDF_Lambert( material.diffuseColor );
@@ -348,7 +355,7 @@ const FRAG_FOG = /* glsl */ `
 #ifdef USE_FOG
   vec3 gwVd = vGwWorld - cameraPosition;
   float gwDist = length( gwVd );
-  gl_FragColor.rgb = gwFog( gl_FragColor.rgb, gwDist, vGwWorld.y, gwVd / max( gwDist, 1e-4 ), uFogColor, uFogDensity, uSunDir, uSunColor, uNight );
+  gl_FragColor.rgb = gwFog( gl_FragColor.rgb, gwDist, vGwWorld.y, gwVd / max( gwDist, 1e-4 ), uFogColor, uFogDensity, uSunTrue, uSunColor, uNight );
 #endif
 `;
 
@@ -445,6 +452,7 @@ export class Materials {
       uGwShadeTint: { value: new Color(d.shadeTint ?? COOL) },
       uGwBands: { value: d.bands ?? 3 },
       uGwSoft: { value: d.softness ?? 0.11 },
+      uGwWrap: { value: d.wrap ?? WRAP[cls] },
       uGwRim: { value: d.rim ?? 0.25 },
       uGwRimPower: { value: d.rimPower ?? 3.0 },
       uGwRimColor: { value: new Color(d.rimColor ?? WARM_RIM) },
@@ -467,6 +475,7 @@ export class Materials {
       Object.assign(shader.uniforms, u);
       shader.uniforms.uTime = shared.uTime;
       shader.uniforms.uSunDir = shared.uSunDir;
+      shader.uniforms.uSunTrue = (shared as any).uSunTrue;
       shader.uniforms.uSunColor = shared.uSunColor;
       shader.uniforms.uNight = shared.uNight;
       shader.uniforms.uFogColor = shared.uFogColor;
@@ -498,7 +507,7 @@ export class Materials {
       fs = replaceOnce(fs, '#include <fog_fragment>', FRAG_FOG, 'fog_fragment');
       shader.fragmentShader = fs;
     };
-    m.customProgramCacheKey = () => 'gw-toon-2';
+    m.customProgramCacheKey = () => 'gw-toon-3';
 
     this.registry.add(m);
     m.addEventListener('dispose', () => this.registry.delete(m));
