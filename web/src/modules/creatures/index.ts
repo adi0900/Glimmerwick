@@ -9,12 +9,12 @@ import type { Ctx, GalleryCam } from '../../engine/types';
 import { defineModule } from '../../engine/types';
 import { sunDirFromHours } from '../../engine/Env';
 import { VoxelAvatar } from '../player/model';
-import { CreatureRenderer, type ActorRow } from './render';
+import { CreatureRenderer, LOCO, type ActorRow } from './render';
 import { SPECIES_BASE_SCALE, SPECIES_NAMES } from './species';
 
 const MAX = 256;
 const chOut = new Float32Array(MAX * 16);
-const row: ActorRow = { id: 0, species: 0, variant: 0, x: 0, y: 0, z: 0, yaw: 0, scale: 1, state: 0, at: 0, mood: 0.5, emote: 0, flags: 0 };
+const row: ActorRow = { id: 0, species: 0, variant: 0, x: 0, y: 0, z: 0, yaw: 0, scale: 1, state: 0, at: 0, mood: 0.5, emote: 0, flags: 0, speed: -1, yawRate: 0 };
 
 interface LabActor {
   avatar: boolean;
@@ -34,6 +34,11 @@ interface LabActor {
 function actor(p: Partial<LabActor>): LabActor {
   return { avatar: false, species: 0, variant: 0, x: 0, z: 0, yaw: 0, scale: 1, state: 0, mood: 0.7, emote: 0, flags: 0, id: 0, ...p };
 }
+
+const sstep01 = (x: number): number => {
+  const c = Math.max(0, Math.min(1, x));
+  return c * c * (3 - 2 * c);
+};
 
 function lcg(seed: number): () => number {
   let s = seed >>> 0;
@@ -60,6 +65,10 @@ function layout(set: string): LabActor[] {
       out.push(actor({ id: id++, avatar: true, x: -3, z: -r * 2.2, yaw: views[r]! }));
       for (let s = 0; s < 3; s++) out.push(actor({ id: id++, species: s, x: -1 + s * 2, z: -r * 2.2, yaw: views[r]!, scale: bs[s]! }));
     }
+  } else if (set === 'treadmill') {
+    // side-on locomotion test bench: positions are fixed, speed / state are driven (mode = walk | run | hop | accel)
+    const mode = (typeof location !== 'undefined' && new URLSearchParams(location.search).get('mode')) || 'walk';
+    for (let s = 0; s < 3; s++) out.push(actor({ id: id++, species: s, x: (s - 1) * 1.2, z: 0, yaw: Math.PI / 2, scale: bs[s]!, state: mode === 'run' ? 2 : mode === 'hop' ? 6 : 1 }));
   } else if (set === 'sizes') {
     out.push(actor({ id: id++, avatar: true, x: 0, z: -2.0, yaw: 0.1 }));
     for (let s = 0; s < 3; s++)
@@ -183,6 +192,7 @@ class Lab {
     c.group = { pos: L(0.6, 1.7, 8.4), target: L(0, 0.35, -0.6), fov: 42 };
     c.groupLow = { pos: L(-2.4, 0.7, 6.6), target: L(0.2, 0.55, -0.6), fov: 46 };
     c.faces = { pos: L(0, 0.62, 6.0), target: L(0, 0.55, 0), fov: 26 };
+    c.tread = { pos: L(0, 0.4, 3.7), target: L(0, 0.25, 0), fov: 30 };
     c.states = { pos: L(0, 1.9, 5.6), target: L(0, 0.3, -1.4), fov: 34 };
     const near = (i: number, dist: number, h: number, az: number, fov: number, ty: number): GalleryCam => {
       const a = this.actors[i];
@@ -238,6 +248,13 @@ class Lab {
       row.mood = a.mood;
       row.emote = a.emote;
       row.flags = a.flags | (a.state === 3 ? 4 : 0);
+      const L = LOCO[a.species]!;
+      row.yawRate = 0;
+      if (this.set === 'treadmill') {
+        const mode = this.ctx.view.params.mode ?? 'walk';
+        const tt = t % 3.2;
+        row.speed = mode === 'accel' ? L.run * sstep01((tt - 0.2) / 1.2) * (1 - sstep01((tt - 2.0) / 0.9)) : mode === 'run' ? L.run : L.walk;
+      } else row.speed = a.state === 1 ? L.walk : a.state === 2 ? L.run : a.state === 5 || a.state === 6 ? L.walk : 0;
       rend.add(row);
     }
   }
@@ -255,22 +272,25 @@ function feedChannel(ctx: Ctx, rend: CreatureRenderer): void {
   const ch = ctx.game.channel('creatures');
   const stride = ch.stride || 16;
   const n = Math.min(ch.lerpRows(ctx.clock.alpha, chOut, { idField: 0, angleFields: [6], rows: MAX }), MAX);
+  const cd = ch.data as Float32Array;
   let benders = 0;
   for (let r = 0; r < n; r++) {
     const o = r * stride;
     row.id = chOut[o]!;
-    row.species = chOut[o + 1]!;
-    row.variant = chOut[o + 2]!;
+    row.species = cd[o + 1]!;
+    row.variant = cd[o + 2]!;
     row.x = chOut[o + 3]!;
     row.y = chOut[o + 4]!;
     row.z = chOut[o + 5]!;
     row.yaw = chOut[o + 6]!;
     row.scale = chOut[o + 7]!;
-    row.state = chOut[o + 8]!;
+    row.state = cd[o + 8]!;
     row.at = chOut[o + 9]!;
     row.mood = chOut[o + 10]!;
-    row.emote = chOut[o + 11]!;
-    row.flags = chOut[o + 12]!;
+    row.emote = cd[o + 11]!;
+    row.flags = cd[o + 12]!;
+    row.speed = chOut[o + 14]!;
+    row.yawRate = chOut[o + 15]!;
     rend.add(row);
     if (benders < 10) {
       ctx.bend(row.x, row.y, row.z, 0.9 * row.scale);

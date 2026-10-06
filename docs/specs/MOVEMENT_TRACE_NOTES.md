@@ -45,3 +45,17 @@ Known properties / follow-ups
 2. Trace airtime / jump distances are sampled positions, so they differ slightly from the tick-exact unit tests.
 3. Default `step_height` is 1.0 (spec 0.6): terrain is 1 m terraces, a child must be able to walk uphill; the pop is hidden by `step_dy` (render-facing easing, 14/s). `PlayerTuning::spec()` restores 0.6 for the vectors.
 4. Camera numbers are a model (same constants as `rig.ts`), jitter uses the real interpolated `player` channel; in-browser check: `node tools/shot.mjs --view game`.
+
+## Creature locomotion (phase 2)
+
+Sim (`crates/sim_creatures`, 60 Hz, deterministic): heading moves along `yaw`, never toward the goal directly. Speed changes only by `accel` / `brake`; heading by a rate-limited, acceleration-limited turn (gain 8/s, rate cap `turn_rate` x (1 - 0.4 x speed01), yaw accel = 10 x turn_rate). Arrival: kinematic braking curve v = sqrt(2 x brake x (d - 0.35)), floor 0.1 x vmax, speed also scaled down to 0.2 when misaligned > 0.5..1.6 rad.
+
+| species | walk / run (m/s) | accel / brake (m/s^2) | turn cap (rad/s) | stride walk / run (m) | hop stride (m) |
+|---|---|---|---|---|---|
+| Puffbun | 0.9 / 3.0 | 3.5 / 4.0 | 5.0 (286 deg/s) | 0.50 / 1.00 | 0.42 (hops 0.8-3.2 Hz) |
+| Tidler | 0.8 / 2.4 | 3.0 / 3.5 | 4.2 (241 deg/s) | 0.36 / 0.70 | play hop 1.5-2.4 Hz |
+| Sprigfox | 1.2 / 4.2 | 6.0 / 6.0 | 7.5 (430 deg/s) | 0.42 / 1.00 | play hop 1.5-2.4 Hz |
+
+Before: velocity and heading snapped (fixed speed, yaw lerp 6/s uncapped), gait driven by time-in-state (`anim_t`), anim state flipped walk/run/idle on AI state. Pose FSM (Rust): gait idle/walk/run on speed/run_speed with hysteresis (idle->walk >0.10, back <0.05; walk->run >0.60, back <0.48). Channel `creatures` cols 14 / 15 now carry speed (m/s) and yaw rate (rad/s) (were unused).
+JS: gait phase += speed/stride (distance driven), hop cycle crouch 0-0.2 / stretch 0.2-0.3 / air 0.3-0.8 / squash 0.8-0.9 with a squash spring (k 520, c 24, overshoot) and always finishes a started hop; all pose layers (sleep, notice, swim, hop, move) are smoothed weights; lean into acceleration (spring), bank into turns, head leads turns, glance/look-at limited to +-0.85 rad and off for a player behind; ears/tail follow through (springs).
+Evidence: `shots/movement/r2/tread_{walk,hop,accel}_strip.png` (lab `?view=creatures&set=treadmill&mode=walk|hop|accel|run`, fixed positions, driven speed). Tests: heading_and_speed_never_snap, speed_ramps_up_gradually, arrival_eases_out_and_stops, gait_class_has_hysteresis, think_is_deterministic.

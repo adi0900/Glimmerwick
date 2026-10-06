@@ -57,6 +57,13 @@ pub mod anim {
     pub const SWIM: u8 = 7;
 }
 
+/// Gait classes with hysteresis (see [`Brain::update_gait`]).
+pub mod gait {
+    pub const IDLE: u8 = 0;
+    pub const WALK: u8 = 1;
+    pub const RUN: u8 = 2;
+}
+
 /// Emote ids (channel `creatures` column 11).
 pub mod emote {
     pub const NONE: u8 = 0;
@@ -98,6 +105,18 @@ pub struct Brain {
     pub moving: bool,
     /// Floating in water during the last step.
     pub swimming: bool,
+    /// Forward speed (m/s) along the heading; changes only by `accel` / `brake`.
+    #[serde(default)]
+    pub speed: f32,
+    /// Heading change rate (rad/s); capped by the species `turn_rate`.
+    #[serde(default)]
+    pub yaw_rate: f32,
+    /// Locomotion class with hysteresis ([`gait`]).
+    #[serde(default)]
+    pub gait: u8,
+    /// Transient: a steering call already ran this tick.
+    #[serde(skip)]
+    pub steered: bool,
 }
 
 impl Brain {
@@ -114,27 +133,42 @@ impl Brain {
             focus: 0,
             moving: false,
             swimming: false,
+            speed: 0.0,
+            yaw_rate: 0.0,
+            gait: gait::IDLE,
+            steered: false,
         }
     }
 
-    /// Animation id for the channel.
+    /// Animation id for the channel. Locomotion comes from the hysteretic gait, not from the AI state.
     pub fn anim_state(&self) -> u8 {
         match self.state {
             State::Sleep => anim::SLEEP,
             State::Happy => anim::HAPPY,
             State::Notice => anim::NOTICE,
             State::Play => anim::HOP,
-            State::Flee => anim::RUN,
-            State::Idle => anim::IDLE,
-            State::Wander | State::Approach => {
-                if !self.moving {
-                    anim::IDLE
-                } else if self.swimming {
-                    anim::SWIM
-                } else {
-                    anim::WALK
-                }
-            }
+            _ => match self.gait {
+                gait::IDLE => anim::IDLE,
+                _ if self.swimming => anim::SWIM,
+                gait::WALK => anim::WALK,
+                _ => anim::RUN,
+            },
+        }
+    }
+
+    /// Pose FSM with hysteresis on `speed / run_speed`: idle -> walk above 0.10 (back below 0.05),
+    /// walk -> run above 0.60 (back below 0.48). Never flickers for noise around a threshold.
+    pub fn update_gait(&mut self, sp: &Species) {
+        let s = self.speed / sp.run_speed;
+        self.gait = match self.gait {
+            gait::IDLE if s > 0.10 => gait::WALK,
+            gait::WALK if s < 0.05 => gait::IDLE,
+            gait::WALK if s > 0.60 => gait::RUN,
+            gait::RUN if s < 0.48 => gait::WALK,
+            g => g,
+        };
+        if self.gait == gait::WALK && s > 0.60 {
+            self.gait = gait::RUN;
         }
     }
 
@@ -218,46 +252,86 @@ struct Agent<'a> {
     brain: &'a mut Brain,
 }
 
-fn turn_toward(yaw: &mut f32, dir_x: f32, dir_z: f32, k: f32) {
-    if dir_x * dir_x + dir_z * dir_z > 1e-8 {
-        let want = math::atan2(dir_x, dir_z);
-        *yaw = math::wrap_pi(*yaw + math::angle_diff(*yaw, want) * k);
-    }
+const R_STOP: f32 = 0.35;
+const YAW_GAIN: f32 = 8.0;
+
+fn smooth01(x: f32) -> f32 {
+    let t = x.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
-fn step_toward(a: &mut Agent, target: Vec2, speed: f32, s: &Surroundings) -> Move {
-    let dx = target.x - a.pos.x;
-    let dz = target.y - a.pos.z;
-    let d = (dx * dx + dz * dz).sqrt();
-    if d < 0.35 {
+/// Rate- and acceleration-limited heading change toward `want` (`None` = keep turning out the current rate).
+fn steer_yaw(a: &mut Agent, want: Option<f32>) {
+    let sp = a.sp;
+    let s01 = (a.brain.speed / sp.run_speed).clamp(0.0, 1.0);
+    let cap = sp.turn_rate * (1.0 - 0.4 * s01);
+    let err = want.map_or(0.0, |w| math::angle_diff(*a.yaw, w));
+    let goal = (YAW_GAIN * err).clamp(-cap, cap);
+    let acc = sp.turn_rate * 10.0 * SIM_DT;
+    let r = a.brain.yaw_rate + (goal - a.brain.yaw_rate).clamp(-acc, acc);
+    a.brain.yaw_rate = r.clamp(-sp.turn_rate, sp.turn_rate);
+    *a.yaw = math::wrap_pi(*a.yaw + a.brain.yaw_rate * SIM_DT);
+}
+
+/// One integration step: turn, accelerate / brake toward `v_goal`, then move along the heading.
+/// Returns `true` when the way ahead is blocked (speed is lost).
+fn advance(a: &mut Agent, v_goal: f32, want: Option<f32>, s: &Surroundings) -> bool {
+    steer_yaw(a, want);
+    let sp = a.sp;
+    let v = a.brain.speed;
+    let dv = (if v_goal > v { sp.accel } else { sp.brake }) * SIM_DT;
+    let nv = v + (v_goal - v).clamp(-dv, dv);
+    a.brain.speed = nv;
+    let step = nv * SIM_DT;
+    if step <= 1e-6 {
         a.brain.moving = false;
-        return Move::Arrived;
+        return false;
     }
-    let (ux, uz) = (dx / d, dz / d);
-    let step = (speed * SIM_DT).min(d);
-    let (nx, nz) = (a.pos.x + ux * step, a.pos.z + uz * step);
+    let (nx, nz) = (a.pos.x + a.yaw.sin() * step, a.pos.z + a.yaw.cos() * step);
 
     // One height sample decides everything: bounds, water depth and steepness along the move.
     let t = s.terrain;
     let g = t.height(nx, nz);
-    let max_water = if a.sp.swims { 1.2 } else { 0.25 };
+    let max_water = if sp.swims { 1.2 } else { 0.25 };
     let here = if a.brain.swimming { t.height(a.pos.x, a.pos.z) } else { a.pos.y };
     let rise = g - here;
     let s_len = step.max(1e-4);
     if !t.contains(nx, nz) || (t.sea_level() - g).max(0.0) >= max_water || rise > 0.9 * s_len || rise < -1.3 * s_len {
+        a.brain.speed = (v - sp.brake * SIM_DT).max(0.0);
         a.brain.moving = false;
-        return Move::Blocked;
+        return true;
     }
-    let (y, swimming) = if a.sp.swims && t.sea_level() - g > 0.15 { (t.sea_level() - 0.12, true) } else { (g, false) };
+    let (y, swimming) = if sp.swims && t.sea_level() - g > 0.15 { (t.sea_level() - 0.12, true) } else { (g, false) };
     *a.pos = Vec3::new(nx, y, nz);
-    a.brain.moving = true;
+    a.brain.moving = nv > 0.05;
     a.brain.swimming = swimming;
-    turn_toward(a.yaw, ux, uz, s.k_turn);
-    Move::Moving
+    false
+}
+
+/// Walks toward `target` at up to `vmax`: eases off over the last stretch (kinematic braking curve) and slows
+/// while the heading is badly misaligned, so turns look like turns instead of slides.
+fn step_toward(a: &mut Agent, target: Vec2, vmax: f32, s: &Surroundings) -> Move {
+    a.brain.steered = true;
+    let dx = target.x - a.pos.x;
+    let dz = target.y - a.pos.z;
+    let d = (dx * dx + dz * dz).sqrt();
+    if d < R_STOP {
+        advance(a, 0.0, None, s);
+        return Move::Arrived;
+    }
+    let want = math::atan2(dx, dz);
+    let err = math::angle_diff(*a.yaw, want).abs();
+    let align = 1.0 - 0.8 * smooth01((err - 0.5) / 1.1);
+    let v_brake = (2.0 * a.sp.brake * (d - R_STOP)).sqrt();
+    let v_goal = (vmax.min(v_brake) * align).max(vmax * 0.1);
+    if advance(a, v_goal, Some(want), s) { Move::Blocked } else { Move::Moving }
 }
 
 fn face(a: &mut Agent, toward: Vec3, s: &Surroundings) {
-    turn_toward(a.yaw, toward.x - a.pos.x, toward.z - a.pos.z, s.k_turn);
+    a.brain.steered = true;
+    let (dx, dz) = (toward.x - a.pos.x, toward.z - a.pos.z);
+    let want = if dx * dx + dz * dz > 1e-8 { Some(math::atan2(dx, dz)) } else { None };
+    advance(a, 0.0, want, s);
 }
 
 /// A random walkable point within the wander radius of `home` (falls back to `home`).
@@ -271,8 +345,32 @@ pub fn pick_wander_target(sp: &Species, home: Vec3, rng: &mut Rng, terrain: &Hei
     Vec2::new(home.x, home.z)
 }
 
-/// Runs one 60 Hz AI step for one creature.
+/// Runs one 60 Hz AI step for one creature: decide (state machine, steering request), then make sure the body
+/// always integrates exactly once (coasting to a stop when nothing steered it), then update the gait class.
 pub fn think(
+    sp: &Species,
+    home: Vec3,
+    pos: &mut Vec3,
+    yaw: &mut f32,
+    brain: &mut Brain,
+    rng: &mut Rng,
+    s: &Surroundings,
+    out: &mut Vec<AiEvent>,
+) {
+    brain.steered = false;
+    decide(sp, home, pos, yaw, brain, rng, s, out);
+    if brain.state == State::Sleep {
+        brain.speed = 0.0;
+        brain.yaw_rate = 0.0;
+        brain.moving = false;
+    } else if !brain.steered {
+        let mut a = Agent { sp, pos: &mut *pos, yaw: &mut *yaw, brain: &mut *brain };
+        advance(&mut a, 0.0, None, s);
+    }
+    brain.update_gait(sp);
+}
+
+fn decide(
     sp: &Species,
     home: Vec3,
     pos: &mut Vec3,
@@ -390,19 +488,14 @@ pub fn think(
             match player {
                 Some((_, p)) if a.brain.timer > 0.0 && player_d2.is_some_and(|d2| d2 < safe * safe) => {
                     let away = Vec2::new(a.pos.x - p.x, a.pos.z - p.z);
-                    let dir = if away.length_squared() > 1e-6 { away.normalize() } else { Vec2::X };
-                    let mut goal = Vec2::new(a.pos.x, a.pos.z) + dir * 6.0;
-                    let mut res = step_toward(&mut a, goal, sp.run_speed, s);
-                    if let Move::Blocked = res {
-                        // slide along the obstacle: try both perpendiculars
-                        for side in [Vec2::new(-dir.y, dir.x), Vec2::new(dir.y, -dir.x)] {
-                            goal = Vec2::new(a.pos.x, a.pos.z) + side * 6.0;
-                            res = step_toward(&mut a, goal, sp.run_speed, s);
-                            if !matches!(res, Move::Blocked) {
-                                break;
-                            }
-                        }
+                    let mut dir = if away.length_squared() > 1e-6 { away.normalize() } else { Vec2::X };
+                    if !walkable(sp, s.terrain, a.pos.x + dir.x * 0.9, a.pos.z + dir.y * 0.9) {
+                        // slide along the obstacle: head for the walkable perpendicular
+                        let (l, r) = (Vec2::new(-dir.y, dir.x), Vec2::new(dir.y, -dir.x));
+                        dir = if walkable(sp, s.terrain, a.pos.x + l.x * 0.9, a.pos.z + l.y * 0.9) { l } else { r };
                     }
+                    let goal = Vec2::new(a.pos.x, a.pos.z) + dir * 6.0;
+                    let res = step_toward(&mut a, goal, sp.run_speed, s);
                     if let Move::Blocked = res {
                         a.brain.enter(State::Idle, 1.0);
                     }
@@ -541,17 +634,92 @@ mod tests {
     }
 
     #[test]
-    fn speed_matches_the_species_table() {
+    fn speed_ramps_up_gradually_and_matches_the_species_table() {
         let t = flat();
         let mut r = Rig::new(SPRIGFOX, Vec3::ZERO);
-        r.brain.enter(State::Wander, 5.0);
+        r.brain.enter(State::Wander, 20.0);
         r.brain.target = Vec2::new(40.0, 0.0);
+        r.yaw = math::PI / 2.0; // already facing the goal
+        r.run(&t, None, false, 6);
+        assert!(r.brain.speed < 0.7 * r.sp.walk_speed, "speed jumped to {} within 0.1 s", r.brain.speed);
+        r.run(&t, None, false, 90);
+        assert!((r.brain.speed - r.sp.walk_speed).abs() < 0.02, "steady speed {} vs {}", r.brain.speed, r.sp.walk_speed);
         let before = r.pos;
         r.run(&t, None, false, 60);
         let moved = math::dist2_xz(before, r.pos).sqrt();
         assert!((moved - r.sp.walk_speed).abs() < 0.05, "moved {moved} m in 1 s, expected {}", r.sp.walk_speed);
-        assert!(r.brain.moving);
         assert_eq!(r.brain.anim_state(), anim::WALK);
+    }
+
+    #[test]
+    fn heading_and_speed_never_snap() {
+        let t = flat();
+        for id in [PUFFBUN, TIDLER, SPRIGFOX] {
+            let mut r = Rig::new(id, Vec3::ZERO);
+            r.brain.aware_cooldown = 0.0;
+            // the player walks a figure that keeps flipping the bearing (behind, side, front ...)
+            let (mut last_yaw, mut last_speed, mut worst_turn, mut worst_acc) = (r.yaw, 0.0f32, 0.0f32, 0.0f32);
+            for n in 0..4000 {
+                let a = n as f32 * 0.013;
+                let player = Some((1, Vec3::new(a.sin() * 6.0, 0.0, a.cos() * 5.0)));
+                r.run(&t, player, false, 1);
+                worst_turn = worst_turn.max(math::angle_diff(last_yaw, r.yaw).abs() / SIM_DT);
+                worst_acc = worst_acc.max((r.brain.speed - last_speed).abs() / SIM_DT);
+                last_yaw = r.yaw;
+                last_speed = r.brain.speed;
+            }
+            assert!(worst_turn <= r.sp.turn_rate + 1e-3, "{}: turned {worst_turn} rad/s > cap {}", r.sp.name, r.sp.turn_rate);
+            assert!(worst_acc <= r.sp.accel.max(r.sp.brake) + 1e-3, "{}: accel {worst_acc}", r.sp.name);
+            assert!(worst_turn > 0.5 * r.sp.turn_rate, "{} never turned hard (test too weak): {worst_turn}", r.sp.name);
+        }
+    }
+
+    #[test]
+    fn arrival_eases_out_and_stops() {
+        let t = flat();
+        let mut r = Rig::new(PUFFBUN, Vec3::ZERO);
+        r.brain.enter(State::Wander, 30.0);
+        r.brain.target = Vec2::new(0.0, 3.0);
+        let mut peak = 0.0f32;
+        for _ in 0..600 {
+            r.run(&t, None, false, 1);
+            peak = peak.max(r.brain.speed);
+            if r.brain.state == State::Idle {
+                break;
+            }
+        }
+        assert_eq!(r.brain.state, State::Idle, "never arrived");
+        assert!(r.brain.speed < 0.6 * peak, "arrived at {} after peaking at {peak}", r.brain.speed);
+        r.run(&t, None, false, 30);
+        assert_eq!(r.brain.speed, 0.0);
+        assert!(math::dist2_xz(r.pos, Vec3::new(0.0, 0.0, 3.0)).sqrt() < 0.6);
+    }
+
+    #[test]
+    fn gait_class_has_hysteresis() {
+        let sp = species(SPRIGFOX);
+        let mut b = Brain::new(&mut Rng::from_seed(3));
+        let mut flips = 0;
+        let mut last = b.gait;
+        // noise around the idle/walk threshold (0.10) and the walk/run threshold (0.60), +-0.02 of run speed
+        for (centre, n) in [(0.10f32, 200), (0.60, 200)] {
+            for i in 0..n {
+                b.speed = (centre + if i % 2 == 0 { 0.02 } else { -0.02 }) * sp.run_speed;
+                b.update_gait(sp);
+                if b.gait != last {
+                    flips += 1;
+                    last = b.gait;
+                }
+            }
+        }
+        assert!(flips <= 2, "gait flickered {flips} times");
+        b.speed = 0.0;
+        b.update_gait(sp);
+        b.update_gait(sp);
+        assert_eq!(b.gait, gait::IDLE);
+        b.speed = sp.run_speed;
+        b.update_gait(sp);
+        assert_eq!(b.gait, gait::RUN);
     }
 
     #[test]
@@ -612,9 +780,15 @@ mod tests {
         let mut c = Rig::new(PUFFBUN, Vec3::ZERO);
         c.brain.aware_cooldown = 0.0;
         let mut closest = f32::MAX;
-        for _ in 0..12 {
-            c.run(&t, player, false, 60);
-            closest = closest.min(math::dist2_xz(c.pos, Vec3::new(6.0, 0.0, 0.0)).sqrt());
+        let mut approached = false;
+        for _ in 0..720 {
+            c.run(&t, player, false, 1);
+            approached |= c.brain.state == State::Approach;
+            if approached && c.brain.state == State::Idle {
+                c.run(&t, player, false, 40); // let it coast to a halt
+                closest = math::dist2_xz(c.pos, Vec3::new(6.0, 0.0, 0.0)).sqrt();
+                break;
+            }
         }
         assert!(closest < c.sp.stop_distance + 0.3, "curious creature never came close: {closest}");
         assert!(closest > c.sp.stop_distance - 0.3, "curious creature ignored its stop distance: {closest}");
@@ -623,12 +797,16 @@ mod tests {
         let mut s = Rig::new(SPRIGFOX, Vec3::ZERO);
         s.brain.aware_cooldown = 0.0;
         let d0 = math::dist2_xz(s.pos, Vec3::new(6.0, 0.0, 0.0)).sqrt();
-        s.run(&t, player, false, 60 * 3);
+        let mut ran = false;
+        for _ in 0..180 {
+            s.run(&t, player, false, 1);
+            ran |= s.brain.anim_state() == anim::RUN;
+        }
         let d1 = math::dist2_xz(s.pos, Vec3::new(6.0, 0.0, 0.0)).sqrt();
+        assert!(ran, "fleeing never reached the run gait");
         assert!(d1 > d0 + 2.0, "shy creature did not flee: {d0} -> {d1}");
         assert!(s.brain.mood < 0.5);
-        assert_eq!(s.brain.anim_state(), anim::RUN);
-        assert!(s.brain.flag_bits() >= flags::FLEEING);
+        assert!(s.all.contains(&AiEvent::Noticed));
 
         // playful Tidler hops about near the player
         let mut p = Rig::new(TIDLER, Vec3::new(0.0, 0.0, 0.0));

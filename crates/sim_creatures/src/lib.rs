@@ -90,7 +90,7 @@ impl Plugin for CreaturesPlugin {
         let creatures = app.register_channel::<f32>(
             ChannelSpec::records::<f32>("creatures", CREATURE_STRIDE as u32, MAX_CREATURES as u32)
                 .interpolated()
-                .doc("id,species,variant,pos xyz,yaw,scale,anim_state,anim_t,mood,emote,flags,target_id,-,- (sorted by id)"),
+                .doc("id,species,variant,pos xyz,yaw,scale,anim_state,anim_t,mood,emote,flags,target_id,speed m/s,yaw_rate rad/s (sorted by id)"),
         );
         app.insert_resource(CreatureChannels { creatures }).insert_resource(CreatureSpawner {
             place: seed.rng("creatures.place"),
@@ -258,8 +258,8 @@ fn publish_creatures(
                 f32::from(b.emote),
                 b.flag_bits(),
                 b.focus as f32,
-                0.0,
-                0.0,
+                b.speed,
+                b.yaw_rate,
             ],
         ));
     }

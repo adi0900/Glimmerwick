@@ -46,6 +46,11 @@ pub struct Species {
     pub swims: bool,
     /// Curious creatures stop this far from the player.
     pub stop_distance: f32,
+    /// Forward acceleration (m/s^2) and braking (m/s^2).
+    pub accel: f32,
+    pub brake: f32,
+    /// Hard cap of the heading change rate (rad/s).
+    pub turn_rate: f32,
 }
 
 /// Species ids.
@@ -57,38 +62,47 @@ pub const SPECIES: [Species; 3] = [
     Species {
         name: "Puffbun",
         habitat: &[biome::MEADOW],
-        walk_speed: 1.1,
-        run_speed: 3.2,
+        walk_speed: 0.9,
+        run_speed: 3.0,
         notice_radius: 9.0,
         personality: Personality::Curious,
         base_scale: 0.8,
         wander_radius: 10.0,
         swims: false,
         stop_distance: 2.4,
+        accel: 3.5,
+        brake: 4.0,
+        turn_rate: 5.0,
     },
     Species {
         name: "Tidler",
         habitat: &[biome::BEACH, biome::SHALLOW_WATER],
-        walk_speed: 1.0,
-        run_speed: 2.8,
+        walk_speed: 0.8,
+        run_speed: 2.4,
         notice_radius: 8.0,
         personality: Personality::Playful,
         base_scale: 0.9,
         wander_radius: 9.0,
         swims: true,
         stop_distance: 3.0,
+        accel: 3.0,
+        brake: 3.5,
+        turn_rate: 4.2,
     },
     Species {
         name: "Sprigfox",
         habitat: &[biome::FOREST],
-        walk_speed: 1.6,
-        run_speed: 5.2,
+        walk_speed: 1.2,
+        run_speed: 4.2,
         notice_radius: 11.0,
         personality: Personality::Shy,
         base_scale: 0.75,
         wander_radius: 12.0,
         swims: false,
         stop_distance: 4.0,
+        accel: 6.0,
+        brake: 6.0,
+        turn_rate: 7.5,
     },
 ];
 
