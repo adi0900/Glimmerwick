@@ -9,6 +9,7 @@ import type { PlayerState } from '../../engine/Bridge';
 import type { Ctx } from '../../engine/types';
 import { buildModel, composeRig, ModelInstances, newPose, PS, resetPose, type Model } from '../creatures/actors';
 import { makeActorMaterial, type ActorMaterial } from '../creatures/material';
+import { fxFor } from '../creatures/fx';
 import { RigState } from '../creatures/render';
 import { AV, AVATAR } from '../creatures/species';
 
@@ -53,7 +54,14 @@ export class VoxelAvatar {
   /** on-screen voxel count etc. for the report */
   readonly stats: { voxels: number; faces: number; parts: number };
 
-  constructor(ctx: Ctx, name = 'player') {
+  private wasG = true;
+  private vyAir = 0;
+  private pg = 0;
+
+  constructor(
+    private readonly ctx: Ctx,
+    name = 'player',
+  ) {
     this.group.name = `${name}.avatar`;
     this.model = buildModel(AVATAR);
     this.hex = [...AVATAR.palettes[0]!];
@@ -177,6 +185,21 @@ export class VoxelAvatar {
     const k = Math.max(0.1, 1 - 0.9 * closed);
     pose[eyes * PS + SYI] = k;
     pose[eyes * PS + SXI] = 1 + (1 - k) * 0.1;
+    // dust: landing puff (scaled by the fall speed) + a pair of puffs per sprint step
+    if (dt > 0) {
+      const fx = fxFor(this.ctx);
+      if (!grounded) this.vyAir = Math.min(this.vyAir, vy);
+      else {
+        if (!this.wasG && !swimming && this.vyAir < -1.5) fx.puff(x, y, z, 7, 0.075, 1.1);
+        this.vyAir = 0;
+      }
+      this.wasG = grounded;
+      const g = Math.floor(this.ph / Math.PI);
+      if (g !== this.pg) {
+        this.pg = g;
+        if (grounded && !swimming && speed > 4.6) fx.puff(x - Math.sin(yaw) * 0.2, y, z - Math.cos(yaw) * 0.2, 2, 0.06, 0.5);
+      }
+    }
     // root: feet position, yaw, volume-preserving squash
     const sxz = 1 / Math.sqrt(sq);
     _q.setFromAxisAngle(_up, yaw);

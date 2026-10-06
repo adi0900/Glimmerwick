@@ -19,5 +19,14 @@
   {"id": "18_face_puffbun", "cam": "facePuffbun", "time": 14.5, "size": "1280x720", "param": "set=sheet"},
   {"id": "19_face_tidler", "cam": "faceTidler", "time": 14.5, "size": "1280x720", "param": "set=sheet"},
   {"id": "20_face_sprigfox", "cam": "faceSprigfox", "time": 14.5, "size": "1280x720", "param": "set=sheet"},
-  {"id": "21_face_avatar", "cam": "faceAvatar", "time": 14.5, "size": "1280x720", "param": "set=sheet"}
+  {"id": "21_face_avatar", "cam": "faceAvatar", "time": 14.5, "size": "1280x720", "param": "set=sheet"},
+  {"id": "22_gameplay_camera", "cam": "gameplay", "time": 16.5, "size": "1280x720", "param": "set=play"},
+  {"id": "23_silhouette_64px", "cam": "far", "time": 16.5, "size": "1280x720", "param": "set=sheet&sil=1", "crop": "300,245,680,195", "zoom": 2},
+  {"id": "24_silhouette_32px", "cam": "far32", "time": 16.5, "size": "1280x720", "param": "set=sheet&sil=1", "crop": "470,293,340,98", "zoom": 3},
+  {"id": "25_silhouette_sheet", "cam": "sheet", "time": 16.5, "size": "1280x720", "param": "set=sheet&sil=1"},
+  {"id": "26_avatar_back", "cam": "avatarBack", "time": 16.5, "size": "1280x720", "param": "set=sheet"},
+  {"id": "27_tread_walk", "cam": "tread", "time": 16.5, "size": "1280x720", "param": "set=treadmill&mode=walk"},
+  {"id": "28_tread_run", "cam": "tread", "time": 16.5, "size": "1280x720", "param": "set=treadmill&mode=run"},
+  {"id": "29_tread_hop_dust", "cam": "tread", "time": 16.5, "size": "1280x720", "param": "set=treadmill&mode=hop"},
+  {"id": "30_night_glow_spill", "cam": "groupLow", "time": 22.5, "size": "1280x720", "param": "set=group"}
 ]

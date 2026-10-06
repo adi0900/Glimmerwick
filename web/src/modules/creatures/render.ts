@@ -16,6 +16,7 @@ import type { Ctx } from '../../engine/types';
 import { buildModel, composeRig, ModelInstances, newPose, PS, resetPose, Spring, type Model } from './actors';
 import { makeActorMaterial, type ActorMaterial } from './material';
 import { SPECIES_DEFS } from './species';
+import { fxFor, type Fx } from './fx';
 
 export interface ActorRow {
   id: number;
@@ -88,6 +89,9 @@ export class RigState {
   vLift = 0;
   glanceNext = 0;
   glanceUntil = 0;
+  /** previous hop fraction / gait half-cycle (dust triggers) */
+  pf = 0;
+  pg = 0;
   private seed: number;
   readonly sp: Spring[] = Array.from({ length: 14 }, () => new Spring());
   constructor(id: number) {
@@ -284,7 +288,8 @@ const animTidler: Animator = (M, pose, A, R, o) => {
     gR = I.gillR!,
     gL = I.gillL!,
     t1 = I.tail1!,
-    t2 = I.tail2!;
+    t2 = I.tail2!,
+    t3 = I.tail3!;
   const legs = [I.legFR!, I.legBL!, I.legFL!, I.legBR!];
   const walkW = A.moveW * (1 - A.wSwim) * (1 - A.hopW);
   const H = 0.19 * A.hopW;
@@ -310,9 +315,13 @@ const animTidler: Animator = (M, pose, A, R, o) => {
   pose[head * PS + RY] += -sw * 0.1 * walkW + sin(R.swPh - 0.7) * 0.1 * swim + 0.05 * sin(t * 0.6) * (1 - A.moveW);
   pose[head * PS + RZ] = mix(0.04 * sin(t * 0.8), 0.12, A.wSleep);
   // tail: integrated phase; the tip lags through a spring and counter-swings against turns
-  const tA = mix(0.2, 0.35, walkW) + 0.1 * swim + 0.3 * A.hopW;
-  pose[t1 * PS + RY] = sin(R.tailPh) * tA - A.yr * 0.05;
-  pose[t2 * PS + RY] = R.sp[4]!.step(sin(R.tailPh - 0.8) * tA * 1.3 - A.yr * 0.09, 90, 6, dt);
+  // 3 segments, each lagging the one before (phase 0.9 rad ~ 0.25 s at walk), +-12 deg at rest, more when walking / hopping
+  const tA = mix(0.16, 0.26, walkW) + 0.08 * swim + 0.12 * A.hopW;
+  pose[t1 * PS + RY] = sin(R.tailPh) * tA * 0.7 - A.yr * 0.04;
+  pose[t2 * PS + RY] = R.sp[4]!.step(sin(R.tailPh - 0.9) * tA - A.yr * 0.07, 110, 8, dt);
+  pose[t3 * PS + RY] = R.sp[5]!.step(sin(R.tailPh - 1.8) * tA * 1.25 - A.yr * 0.1, 90, 6, dt);
+  pose[t3 * PS + RX] = R.sp[6]!.step(0.04 * sin(t * 1.3) + 0.12 * A.moveW + 0.3 * h.air * A.hopW - 0.05 * A.acc, 80, 6, dt);
+  pose[t2 * PS + RX] = 0.03 * sin(t * 1.3 + 0.5) + 0.1 * h.air * A.hopW;
   // gills: flutter + springs; flare when noticing, droop when asleep
   const flare = mix(0.14 + 0.1 * sin(t * 3.1) + 0.12 * swim, 0.02, A.wSleep) * (1 - A.wNotice) + 0.42 * A.wNotice;
   const g0 = R.sp[0]!.step(flare + (swim > 0.5 ? 0.1 * sin(t * 6) : 0.06 * sin(t * 4.3 + 1)), 130, 5, dt);
@@ -370,7 +379,7 @@ const animSprigfox: Animator = (M, pose, A, R, o) => {
   // tail: lift with speed, swing against turns, follow-through through a 2-spring chain
   const tailLift = mix(mix(0, -0.1, A.moveW) + A.runW * -0.45 + (A.hopW > 0.01 ? -0.25 * A.hopW : 0), 0, slp) - 0.04 * A.acc;
   pose[t1 * PS + RX] = R.sp[4]!.step(tailLift + 0.05 * sin(t * 1.9), 80, 6, dt);
-  const ty = mix(sin(R.tailPh) * (0.22 + 0.2 * A.hopW) , 0.9, slp) - A.yr * 0.07;
+  const ty = mix(sin(R.tailPh) * (0.14 + 0.12 * A.hopW), 0.9, slp) - A.yr * 0.06;
   pose[t1 * PS + RY] = ty;
   pose[t2 * PS + RY] = R.sp[5]!.step(ty * 0.9 + 0.1 * sin(t * 2.3), 60, 4.5, dt);
   pose[t2 * PS + RX] = R.sp[6]!.step(tailLift * 0.5, 50, 4, dt);
@@ -408,6 +417,7 @@ export class CreatureRenderer {
   readonly insts: ModelInstances[];
   readonly mats: ActorMaterial[];
   private readonly poses: Float32Array[];
+  private readonly fx: Fx;
   private readonly rigs = new Map<number, RigState>();
   private frame = 0;
   private t = 0;
@@ -433,6 +443,7 @@ export class CreatureRenderer {
     this.mats = this.models.map((m) => makeActorMaterial(ctx, m.def.palettes, `creature.${m.def.name}`));
     this.insts = this.models.map((m, i) => new ModelInstances(m, this.mats[i]!.material, capacity, this.group, ctx.mats, `creature.${m.def.name}`));
     this.poses = this.models.map((m) => newPose(m));
+    this.fx = fxFor(ctx);
   }
 
   begin(t: number, dt: number, playerPos: Vector3 | null): void {
@@ -443,6 +454,7 @@ export class CreatureRenderer {
     this.actors = 0;
     this.cam.copy(this.ctx.camera.position);
     for (const i of this.insts) i.begin();
+    this.fx.begin();
   }
 
   /** advances the per-creature locomotion state (all smoothing is dt based; dt = 0 freezes everything) */
@@ -633,17 +645,38 @@ export class CreatureRenderer {
     _s.set(r.scale * sxz, r.scale * sq, r.scale * sxz);
     _root.compose(_p, _q, _s);
     composeRig(this.models[sp]!, _root, pose, inst, slot);
-    inst.setAttr(slot, Math.max(0, Math.min(2, r.variant | 0)), O.glow);
+    const vr = Math.max(0, Math.min(2, r.variant | 0));
+    inst.setAttr(slot, vr, O.glow);
+    // --- life FX: landing + run-step dust (near the camera only), coloured ground spill under glow markings at night
+    if (dt > 0 && d2 < 28 * 28 && r.state !== 4) {
+      const f = R.hop - Math.floor(R.hop);
+      const sz = 0.085 * r.scale;
+      if (R.hopW > 0.5 && R.pf < 0.8 && f >= 0.8) this.fx.puff(r.x, r.y, r.z, 6 + (R.runW > 0.5 ? 2 : 0), sz, 0.9);
+      R.pf = f;
+      const g = Math.floor(R.gph / Math.PI);
+      if (g !== R.pg) {
+        R.pg = g;
+        if (sp !== 0 && R.runW > 0.55 && R.hopW < 0.3) this.fx.puff(r.x - Math.sin(R.vyaw) * 0.25 * r.scale, r.y, r.z - Math.cos(R.vyaw) * 0.25 * r.scale, 2, sz * 0.8, 0.5);
+      }
+    }
+    const night = (this.ctx.uniforms.uNight as { value: number }).value;
+    if (night > 0.05 && d2 < 60 * 60) {
+      const pc = this.mats[sp]!.pal[vr * 16 + 3]!;
+      const k = 0.95 * night * O.glow;
+      this.fx.spillAdd(r.x, r.y, r.z, 3.2 * r.scale, pc.x * k, pc.y * k, pc.z * k);
+    }
   }
 
   end(): void {
     for (const i of this.insts) i.end();
+    this.fx.end(this.dt);
     if ((this.frame & 63) === 0) for (const [id, R] of this.rigs) if (this.frame - R.seen > 120) this.rigs.delete(id);
   }
 
   dispose(): void {
     for (const i of this.insts) i.dispose();
     for (const m of this.mats) m.material.dispose();
+    this.fx.dispose();
     this.group.parent?.remove(this.group);
   }
 }

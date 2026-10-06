@@ -435,6 +435,7 @@ struct Cottage {
     d: i32,
     base_y: i32,
     door: u8,
+    var: u8,
 }
 
 const STRATA_TOP: BlockId = u16::MAX;
@@ -617,13 +618,19 @@ impl<'a> Gen<'a> {
     fn pond(&mut self) {
         let p = self.g.features.pond.clone();
         let water_y = (p.level + 0.02).floor() as i32;
-        let r = p.rx.max(p.rz) * 1.7;
+        let r = p.rx.max(p.rz) * 1.8;
         let (x0, x1) = (((p.x - r).floor() as i32 - ORIGIN_X).max(0) as usize, ((p.x + r).ceil() as i32 - ORIGIN_X).clamp(0, NX as i32 - 1) as usize);
         let (z0, z1) = (((p.z - r).floor() as i32 - ORIGIN_Z).max(0) as usize, ((p.z + r).ceil() as i32 - ORIGIN_Z).clamp(0, NZ as i32 - 1) as usize);
         for iz in z0..=z1 {
             for ix in x0..=x1 {
                 let (wx, wz) = ((ORIGIN_X + ix as i32) as f32 + 0.5, (ORIGIN_Z + iz as i32) as f32 + 0.5);
-                let e = p.e(wx, wz);
+                let e0 = p.e(wx, wz);
+                // organic outline: 2-octave noise warps the elliptic radius (about +-3 m), plus a lobe on one side
+                let n1 = value_noise(self.seed ^ 0x9D1, wx * 0.11, wz * 0.11) - 0.5;
+                let n2 = value_noise(self.seed ^ 0x9D2, wx * 0.27, wz * 0.27) - 0.5;
+                let e = e0 * (1.0 - 0.6 * n1 - 0.24 * n2);
+                // the rim also covers the original bowl so no dry pit is left where the outline shrank
+                let rim = e.min(e0);
                 let c = iz * NX + ix;
                 if e < 1.02 {
                     let bed = if e < 0.55 { water_y - 2 } else { water_y - 1 };
@@ -631,9 +638,9 @@ impl<'a> Gen<'a> {
                     self.wl[c] = (water_y + SEA_Y - 1) as i16;
                     self.bed[c] = if e < 0.4 { 4 } else { 2 };
                     self.bio[c] = biome::POND_BANK;
-                } else if e < 1.3 {
+                } else if rim < 1.3 {
                     self.h[c] = self.h[c].max(water_y);
-                    if e < 1.14 {
+                    if rim < 1.14 {
                         self.bio[c] = biome::POND_BANK;
                     }
                 }
@@ -655,17 +662,20 @@ impl<'a> Gen<'a> {
                     let lv = lerp(a[3], b[3], t);
                     let hw = lerp(a[2], b[2], t).max(0.9);
                     let wy = (lv + 0.02).floor() as i32;
-                    let reach = hw + 1.7;
+                    let reach = hw * 1.4 + 1.7;
                     let (x0, x1) = (((cx - reach).floor() as i32 - ORIGIN_X).max(0), ((cx + reach).ceil() as i32 - ORIGIN_X).min(NX as i32 - 1));
                     let (z0, z1) = (((cz - reach).floor() as i32 - ORIGIN_Z).max(0), ((cz + reach).ceil() as i32 - ORIGIN_Z).min(NZ as i32 - 1));
                     for iz in z0..=z1 {
                         for ix in x0..=x1 {
                             let (wx, wz) = ((ORIGIN_X + ix) as f32 + 0.5, (ORIGIN_Z + iz) as f32 + 0.5);
                             let d = ((wx - cx) * (wx - cx) + (wz - cz) * (wz - cz)).sqrt();
-                            let ratio = d / hw;
+                            // wandering banks: the channel width breathes between pools and runs (0.85 .. 1.4 x)
+                            let f = 0.85 + 0.55 * value_noise(self.seed ^ 0x77, wx * 0.14, wz * 0.14);
+                            let hwe = hw * f;
+                            let ratio = d / hwe;
                             let c = iz as usize * NX + ix as usize;
                             if ratio < best[c].0 {
-                                best[c] = (ratio, wy, hw);
+                                best[c] = (ratio, wy, hwe);
                             }
                         }
                     }
@@ -695,18 +705,23 @@ impl<'a> Gen<'a> {
         let spawn = f.spawn;
         let a0 = u01(h3(self.seed, 7, 7, 7)) * math::TAU;
         let mut out: Vec<Cottage> = Vec::new();
-        for k in 0..8i32 {
-            if out.len() >= 4 {
+        for k in 0..10i32 {
+            if out.len() >= 5 {
                 break;
             }
-            let a = a0 + k as f32 * (math::TAU / 8.0) + (u01(h3(self.seed, k, 3, 3)) - 0.5) * 0.25;
-            let r = 11.0 + (k % 2) as f32 * 4.0;
+            let a = a0 + k as f32 * (math::TAU / 10.0) + (u01(h3(self.seed, k, 3, 3)) - 0.5) * 0.25;
+            let r = 11.0 + (k % 3) as f32 * 2.5;
             let (sa, ca) = math::sin_cos(a);
             let (cx, cz) = (vx + ca * r, vz + sa * r);
             if ((cx - spawn[0]) * (cx - spawn[0]) + (cz - spawn[1]) * (cz - spawn[1])).sqrt() < 7.5 {
                 continue;
             }
-            let (w, d) = if k % 2 == 0 { (7, 5) } else { (5, 5) };
+            let var = (out.len() % 4) as u8;
+            let (w, d) = match var {
+                0 => (7, 5),
+                3 => (5, 7),
+                _ => (5, 5),
+            };
             let ix0 = cx.floor() as i32 - ORIGIN_X - w / 2;
             let iz0 = cz.floor() as i32 - ORIGIN_Z - d / 2;
             if ix0 < 4 || iz0 < 4 || ix0 + w + 4 >= NX as i32 || iz0 + d + 4 >= NZ as i32 {
@@ -727,7 +742,7 @@ impl<'a> Gen<'a> {
             if !ok || hi - lo > 2 {
                 continue;
             }
-            let overlaps = out.iter().any(|o| ix0 < o.x0 + o.w + 3 && o.x0 < ix0 + w + 3 && iz0 < o.z0 + o.d + 3 && o.z0 < iz0 + d + 3);
+            let overlaps = out.iter().any(|o| ix0 < o.x0 + o.w + 5 && o.x0 < ix0 + w + 5 && iz0 < o.z0 + o.d + 5 && o.z0 < iz0 + d + 5);
             if overlaps {
                 continue;
             }
@@ -741,7 +756,7 @@ impl<'a> Gen<'a> {
             }
             let (dx, dz) = (vx - cx, vz - cz);
             let door = if dx.abs() > dz.abs() { if dx > 0.0 { 0 } else { 1 } } else if dz > 0.0 { 2 } else { 3 };
-            out.push(Cottage { x0: ix0, z0: iz0, w, d, base_y, door });
+            out.push(Cottage { x0: ix0, z0: iz0, w, d, base_y, door, var });
         }
         out
     }
@@ -754,6 +769,7 @@ impl<'a> Gen<'a> {
             3 => return (SAND, SAND, 3),
             4 => return (CLAY, CLAY, 2),
             5 => return (PACKED, DIRT, 3),
+            6 => return (COBBLE, DIRT, 3),
             _ => {}
         }
         match bio {
@@ -946,6 +962,41 @@ impl<'a> Gen<'a> {
         out
     }
 
+    /// Gable roof (stepped, one block overhang). `along_x`: the ridge runs along x.
+    fn gable(&mut self, x0: i32, z0: i32, w: i32, d: i32, y: i32, id: BlockId, along_x: bool) {
+        let span = if along_x { d } else { w };
+        for k in 0..=((span + 1) / 2) {
+            if along_x {
+                for z in (z0 - 1 + k)..=(z0 + d - k) {
+                    for x in (x0 - 1)..=(x0 + w) {
+                        self.put(x, y + k, z, id, true);
+                    }
+                }
+            } else {
+                for x in (x0 - 1 + k)..=(x0 + w - k) {
+                    for z in (z0 - 1)..=(z0 + d) {
+                        self.put(x, y + k, z, id, true);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Hip (pyramid) roof with a one block overhang.
+    fn hip(&mut self, x0: i32, z0: i32, w: i32, d: i32, y: i32, id: BlockId) {
+        let mut k = 0;
+        while x0 - 1 + k <= x0 + w - k && z0 - 1 + k <= z0 + d - k {
+            for z in (z0 - 1 + k)..=(z0 + d - k) {
+                for x in (x0 - 1 + k)..=(x0 + w - k) {
+                    self.put(x, y + k, z, id, true);
+                }
+            }
+            k += 1;
+        }
+    }
+
+    /// Four designs: 0 red-tile gable cottage (chimney, flower boxes), 1 timber cabin with a flowering turf hip roof,
+    /// 2 two-storey stone-and-plaster house with a hip roof, 3 warm-stone house with a plank gable along z.
     fn build_cottage(&mut self, c: &Cottage) {
         let fl = c.base_y + SEA_Y;
         let (x0, z0, w, d) = (c.x0, c.z0, c.w, c.d);
@@ -955,38 +1006,348 @@ impl<'a> Gen<'a> {
             2 => (x0 + w / 2, z0 + d - 1),
             _ => (x0 + w / 2, z0),
         };
+        let (wall_lo, wall_up, h) = match c.var {
+            0 => (COBBLE, PLASTER, 3),
+            1 => (PLANKS, PLANKS, 3),
+            2 => (COBBLE, PLASTER, 6),
+            _ => (STONE_WARM, STONE_WARM, 3),
+        };
         for z in z0..z0 + d {
             for x in x0..x0 + w {
                 let edge = x == x0 || x == x0 + w - 1 || z == z0 || z == z0 + d - 1;
                 let corner = (x == x0 || x == x0 + w - 1) && (z == z0 || z == z0 + d - 1);
                 self.put(x, fl - 1, z, if edge { COBBLE } else { PLANKS }, true);
-                for dy in 0..3 {
-                    let window = dy == 1 && !corner && ((z == z0 || z == z0 + d - 1) && x - x0 == w / 2 || (x == x0 || x == x0 + w - 1) && z - z0 == d / 2);
+                let zwall = z == z0 || z == z0 + d - 1;
+                let beam = c.var == 1 && !corner && ((zwall && (x - x0) % 4 == 0) || (!zwall && (z - z0) % 4 == 0));
+                for dy in 0..h {
+                    let mid = if zwall { x - x0 == w / 2 } else { z - z0 == d / 2 };
+                    let window = (dy == 1 || (h == 6 && dy == 4)) && !corner && edge && mid;
                     let door = x == dx && z == dz && dy < 2;
+                    let low = if h == 6 { 3 } else { 1 };
                     let id = if door || !edge {
                         AIR
                     } else if corner {
                         LOG_OAK
-                    } else if dy == 0 {
-                        COBBLE
                     } else if window {
                         GLASS
+                    } else if beam {
+                        LOG_OAK
+                    } else if dy < low {
+                        wall_lo
                     } else {
-                        PLASTER
+                        wall_up
                     };
                     self.put(x, fl + dy, z, id, true);
                 }
             }
         }
-        // stepped gable roof along x with a one block overhang
-        for k in 0..=((d + 1) / 2) {
-            for z in (z0 - 1 + k)..=(z0 + d - k) {
-                for x in (x0 - 1)..=(x0 + w) {
-                    self.put(x, fl + 3 + k, z, ROOF_TILE, true);
+        let chim;
+        match c.var {
+            0 => {
+                self.gable(x0, z0, w, d, fl + 3, ROOF_TILE, true);
+                chim = (x0 + w - 2, z0 + 1, fl + 3, fl + 7);
+            }
+            1 => {
+                self.hip(x0, z0, w, d, fl + 3, GRASS_FLOWER);
+                chim = (x0 + 1, z0 + 1, fl + 3, fl + 7);
+            }
+            2 => {
+                self.hip(x0, z0, w, d, fl + 6, ROOF_TILE);
+                chim = (x0 + 1, z0 + 1, fl + 6, fl + 10);
+            }
+            _ => {
+                self.gable(x0, z0, w, d, fl + 3, PLANKS, false);
+                chim = (x0 + 1, z0 + d - 2, fl + 3, fl + 7);
+            }
+        }
+        for y in chim.2..=chim.3 {
+            self.put(chim.0, y, chim.1, if y == chim.3 { STONE_WARM } else { COBBLE }, true);
+        }
+        self.put(x0 + w / 2, fl + 2, z0 + d / 2, LANTERN, true);
+        // flower boxes on the sill row outside the windows (never in front of the door)
+        if c.var == 0 || c.var == 3 {
+            let (ox, oz) = match c.door {
+                0 => (1, 0),
+                1 => (-1, 0),
+                2 => (0, 1),
+                _ => (0, -1),
+            };
+            for (bx, bz) in [(x0 + w / 2, z0 - 1), (x0 + w / 2, z0 + d), (x0 - 1, z0 + d / 2), (x0 + w, z0 + d / 2)] {
+                if (bx, bz) != (dx + ox, dz + oz) {
+                    self.put(bx, fl, bz, if (bx + bz) & 1 == 0 { LEAVES_BLOSSOM } else { LEAVES_BERRY }, false);
                 }
             }
         }
-        self.put(x0 + w / 2, fl + 2, z0 + d / 2, LANTERN, true);
+    }
+
+    /// Grassy land that a path may cover.
+    fn pathable(&self, c: usize) -> bool {
+        self.wl[c] < 0 && self.bed[c] == 0 && matches!(self.bio[c], biome::MEADOW | biome::FLOWER_MEADOW | biome::VILLAGE | biome::FOREST_FLOOR | biome::HIGHLAND | biome::DIRT_PATH)
+    }
+
+    /// Stamps a wandering 2-4 m wide path band along a polyline (taper: 0 at the ends so it meets the plaza / pond cleanly).
+    fn stamp_path(&mut self, pts: &[[f32; 2]], salt: u32, amp: f32, base_hw: f32) {
+        if pts.len() < 2 {
+            return;
+        }
+        let n = pts.len();
+        for (i, p) in pts.iter().enumerate() {
+            let a = pts[i.saturating_sub(1)];
+            let b = pts[(i + 1).min(n - 1)];
+            let (tx, tz) = (b[0] - a[0], b[1] - a[1]);
+            let l = (tx * tx + tz * tz).sqrt().max(1e-3);
+            let (px, pz) = (-tz / l, tx / l);
+            let s = i as f32;
+            let taper = ss(0.0, 9.0, s) * ss(0.0, 9.0, (n - 1 - i) as f32);
+            let off = (value_noise(self.seed ^ 0xBA7 ^ salt, s * 0.05, salt as f32 * 3.1) - 0.5) * 2.0 * amp * taper;
+            let hw = base_hw + 0.8 * value_noise(self.seed ^ 0xBA8 ^ salt, s * 0.09, salt as f32 * 1.7);
+            let (cx, cz) = (p[0] + px * off, p[1] + pz * off);
+            let r = hw.ceil() as i32 + 1;
+            for dz in -r..=r {
+                for dx in -r..=r {
+                    let (wx, wz) = (cx.floor() as i32 + dx, cz.floor() as i32 + dz);
+                    let (ix, iz) = (wx - ORIGIN_X, wz - ORIGIN_Z);
+                    if ix < 2 || iz < 2 || ix >= NX as i32 - 2 || iz >= NZ as i32 - 2 {
+                        continue;
+                    }
+                    let d = ((wx as f32 + 0.5 - cx).powi(2) + (wz as f32 + 0.5 - cz).powi(2)).sqrt();
+                    let c = iz as usize * NX + ix as usize;
+                    if !self.pathable(c) {
+                        continue;
+                    }
+                    let hh = u01(h3(self.seed ^ 0x6A7, ix, 5, iz));
+                    if d <= hw {
+                        self.bio[c] = biome::DIRT_PATH;
+                        if hh < 0.05 || (d > hw - 0.8 && hh < 0.3) {
+                            self.bed[c] = 5; // packed-earth patches along the edge
+                        }
+                    } else if d <= hw + 0.9 && hh < 0.1 {
+                        self.bed[c] = 5; // stray patches beside the path
+                    }
+                }
+            }
+        }
+    }
+
+    /// Replaces the generator's 1-voxel zig-zag path by a meandering network + a cobble plaza and door walks.
+    /// Returns the plaza centre (world metres).
+    fn paths(&mut self, plans: &[Cottage]) -> [f32; 2] {
+        let f = &self.g.features;
+        let (vx, vz, vr) = (f.village[0], f.village[1], f.village_r);
+        let spawn = f.spawn;
+        let paths = f.paths.clone();
+        for c in 0..NX * NZ {
+            if self.bio[c] == biome::DIRT_PATH {
+                let (wx, wz) = ((ORIGIN_X + (c % NX) as i32) as f32, (ORIGIN_Z + (c / NX) as i32) as f32);
+                self.bio[c] = if ((wx - vx).powi(2) + (wz - vz).powi(2)).sqrt() < vr { biome::VILLAGE } else { biome::MEADOW };
+            }
+        }
+        // plaza centre: village centre, nudged off the spawn point
+        let (mut px, mut pz) = (vx, vz);
+        let (sx, sz) = (px - spawn[0], pz - spawn[1]);
+        if sx * sx + sz * sz < 16.0 {
+            let l = (sx * sx + sz * sz).sqrt();
+            let (ux, uz) = if l < 0.05 { (1.0, 0.0) } else { (sx / l, sz / l) };
+            px = spawn[0] + ux * 5.5;
+            pz = spawn[1] + uz * 5.5;
+        }
+        for (k, pl) in paths.iter().enumerate() {
+            // every road starts on the plaza
+            let mut v = pl.clone();
+            if let Some(first) = v.first_mut() {
+                *first = [px, pz];
+            }
+            self.stamp_path(&v, 11 + k as u32 * 7, 3.4, 1.0);
+        }
+        // door walks: plaza -> in front of each door
+        for (k, c) in plans.iter().enumerate() {
+            let (dx, dz) = match c.door {
+                0 => (c.x0 + c.w, c.z0 + c.d / 2),
+                1 => (c.x0 - 1, c.z0 + c.d / 2),
+                2 => (c.x0 + c.w / 2, c.z0 + c.d),
+                _ => (c.x0 + c.w / 2, c.z0 - 1),
+            };
+            let (ex, ez) = ((ORIGIN_X + dx) as f32 + 0.5, (ORIGIN_Z + dz) as f32 + 0.5);
+            let len = ((px - ex).powi(2) + (pz - ez).powi(2)).sqrt().max(1.0);
+            let m = len.ceil() as usize + 1;
+            let pts: Vec<[f32; 2]> = (0..=m)
+                .map(|i| {
+                    let t = i as f32 / m as f32;
+                    [ex + (px - ex) * t, ez + (pz - ez) * t]
+                })
+                .collect();
+            self.stamp_path(&pts, 101 + k as u32 * 13, 1.6, 0.55);
+        }
+        // cobble plaza with a noisy rim
+        let r = 5;
+        for dz in -r..=r {
+            for dx in -r..=r {
+                let (wx, wz) = (px.floor() as i32 + dx, pz.floor() as i32 + dz);
+                let (ix, iz) = (wx - ORIGIN_X, wz - ORIGIN_Z);
+                if ix < 2 || iz < 2 || ix >= NX as i32 - 2 || iz >= NZ as i32 - 2 {
+                    continue;
+                }
+                let d = ((wx as f32 + 0.5 - px).powi(2) + (wz as f32 + 0.5 - pz).powi(2)).sqrt();
+                let lim = 3.3 + 1.2 * value_noise(self.seed ^ 0x91A, wx as f32 * 0.4, wz as f32 * 0.4);
+                let c = iz as usize * NX + ix as usize;
+                if d < lim && self.pathable(c) {
+                    self.bio[c] = biome::VILLAGE;
+                    self.bed[c] = 6;
+                }
+            }
+        }
+        [px, pz]
+    }
+
+    /// Ground layer of a free column (grass-like, no water, 3 m of air above), else None.
+    fn free_ground(&self, x: i32, z: i32) -> Option<i32> {
+        let (ix, iz) = (x - ORIGIN_X, z - ORIGIN_Z);
+        if ix < 3 || iz < 3 || ix >= NX as i32 - 3 || iz >= NZ as i32 - 3 {
+            return None;
+        }
+        let c = iz as usize * NX + ix as usize;
+        if self.wl[c] >= 0 || self.h[c] < 1 {
+            return None;
+        }
+        let g = self.h[c] + SEA_Y - 1;
+        if !blocks::is_ground(self.w.blocks[VoxelWorld::cell(ix as usize, g as usize, iz as usize)]) {
+            return None;
+        }
+        for k in 1..=3 {
+            if self.w.blocks[VoxelWorld::cell(ix as usize, (g + k) as usize, iz as usize)] != AIR {
+                return None;
+            }
+        }
+        Some(g)
+    }
+
+    /// A rectangle of free columns on one level, or None.
+    fn flat_spot(&self, x: i32, z: i32, w: i32, d: i32) -> Option<i32> {
+        let g0 = self.free_ground(x, z)?;
+        for zz in z..z + d {
+            for xx in x..x + w {
+                if self.free_ground(xx, zz)? != g0 {
+                    return None;
+                }
+            }
+        }
+        Some(g0)
+    }
+
+    fn lamp_post(&mut self, x: i32, z: i32) {
+        if let Some(g) = self.free_ground(x - ORIGIN_X + ORIGIN_X, z) {
+            self.put(x - ORIGIN_X, g + 1, z - ORIGIN_Z, LOG_OAK, false);
+            self.put(x - ORIGIN_X, g + 2, z - ORIGIN_Z, LOG_OAK, false);
+            self.put(x - ORIGIN_X, g + 3, z - ORIGIN_Z, LANTERN, false);
+        }
+    }
+
+    /// Village props: well, market stall, lamp posts beside doors, picket fences, garden beds. All coordinates in world metres
+    /// here; `put` takes grid indices, so every call subtracts the origin.
+    fn props(&mut self, plans: &[Cottage], plaza: [f32; 2]) {
+        let (wx, wz) = (plaza[0].floor() as i32, plaza[1].floor() as i32);
+        let put = |s: &mut Self, x: i32, y: i32, z: i32, id: BlockId, f: bool| {
+            s.put(x - ORIGIN_X, y, z - ORIGIN_Z, id, f);
+        };
+        // well (3x3, roofed, glowing lantern inside)
+        if let Some(g) = self.flat_spot(wx - 1, wz - 1, 3, 3) {
+            let fl = g + 1;
+            for dz in -1..=1 {
+                for dx in -1..=1 {
+                    if dx == 0 && dz == 0 {
+                        put(self, wx, g, wz, WATER, true);
+                        put(self, wx, g - 1, wz, CLAY, true);
+                    } else {
+                        put(self, wx + dx, fl, wz + dz, COBBLE, true);
+                    }
+                }
+            }
+            for (cx, cz) in [(-1, -1), (1, -1), (-1, 1), (1, 1)] {
+                put(self, wx + cx, fl + 1, wz + cz, LOG_OAK, true);
+                put(self, wx + cx, fl + 2, wz + cz, LOG_OAK, true);
+            }
+            for dz in -1..=1 {
+                for dx in -1..=1 {
+                    put(self, wx + dx, fl + 3, wz + dz, ROOF_TILE, true);
+                }
+            }
+            put(self, wx, fl + 4, wz, ROOF_TILE, true);
+            put(self, wx, fl + 2, wz, LANTERN, true);
+        }
+        // market stall: first flat 4x3 spot on a ring around the plaza
+        let a0 = u01(h3(self.seed, 21, 2, 1)) * math::TAU;
+        for k in 0..20 {
+            let a = a0 + k as f32 * 0.31;
+            let (sa, ca) = math::sin_cos(a);
+            let (sx, sz) = (wx + (ca * 9.0) as i32, wz + (sa * 9.0) as i32);
+            if let Some(g) = self.flat_spot(sx, sz, 4, 3) {
+                let fl = g + 1;
+                for xx in 0..4 {
+                    put(self, sx + xx, fl, sz, PLANKS, false);
+                    for zz in 0..3 {
+                        put(self, sx + xx, fl + 3, sz + zz, if xx % 2 == 0 { ROOF_TILE } else { PLASTER }, false);
+                    }
+                    if xx == 1 || xx == 2 {
+                        put(self, sx + xx, fl + 1, sz, [LEAVES_APPLE, LEAVES_ORANGE, LEAVES_BERRY][((xx + k) % 3) as usize], false);
+                    }
+                }
+                for (px, pz) in [(0, 0), (3, 0), (0, 2), (3, 2)] {
+                    for yy in (if pz == 0 { 1 } else { 0 })..=2 {
+                        put(self, sx + px, fl + yy, sz + pz, LOG_OAK, false);
+                    }
+                }
+                put(self, sx + 1, fl + 2, sz + 2, LANTERN, false);
+                break;
+            }
+        }
+        for c in plans {
+            let (dx, dz, ox, oz): (i32, i32, i32, i32) = match c.door {
+                0 => (c.x0 + c.w - 1, c.z0 + c.d / 2, 1, 0),
+                1 => (c.x0, c.z0 + c.d / 2, -1, 0),
+                2 => (c.x0 + c.w / 2, c.z0 + c.d - 1, 0, 1),
+                _ => (c.x0 + c.w / 2, c.z0, 0, -1),
+            };
+            let (wdx, wdz) = (ORIGIN_X + dx, ORIGIN_Z + dz);
+            let (sx, sz) = (oz.abs(), ox.abs());
+            self.lamp_post(wdx + ox + sx * 2, wdz + oz + sz * 2);
+            if c.var >= 2 {
+                self.lamp_post(wdx + ox - sx * 2, wdz + oz - sz * 2);
+            }
+            // picket fence ring (variants 0 and 1), open in front of the door
+            if c.var <= 1 {
+                let (fx0, fz0) = (ORIGIN_X + c.x0 - 2, ORIGIN_Z + c.z0 - 2);
+                let (fw, fd) = (c.w + 4, c.d + 4);
+                for zz in 0..fd {
+                    for xx in 0..fw {
+                        if !(xx == 0 || xx == fw - 1 || zz == 0 || zz == fd - 1) || (xx + zz) % 2 == 1 {
+                            continue;
+                        }
+                        let (x, z) = (fx0 + xx, fz0 + zz);
+                        if (x - (wdx + ox * 2)).abs() <= 1 && (z - (wdz + oz * 2)).abs() <= 1 {
+                            continue;
+                        }
+                        let ci = (z - ORIGIN_Z) as usize * NX + (x - ORIGIN_X) as usize;
+                        if self.bio[ci] == biome::DIRT_PATH || self.bed[ci] != 0 {
+                            continue;
+                        }
+                        if let Some(g) = self.free_ground(x, z) {
+                            put(self, x, g + 1, z, PLANKS, false);
+                        }
+                    }
+                }
+            }
+            // flower garden behind the house (variants 0, 3)
+            if c.var == 0 || c.var == 3 {
+                let depth = if ox != 0 { c.w } else { c.d } + 2;
+                let (bx, bz) = (wdx - ox * depth, wdz - oz * depth);
+                for k in -1..=1 {
+                    let (gx, gz) = (bx + k * sx, bz + k * sz);
+                    if let Some(g) = self.free_ground(gx, gz) {
+                        put(self, gx, g, gz, GRASS_FLOWER, true);
+                    }
+                }
+            }
+        }
     }
 
     fn leaf_blob(&mut self, leaves: &mut Vec<(i32, i32, i32)>, cx: i32, cy: i32, cz: i32, rx: i32, ry: i32, leaf: BlockId, salt: i32) {
@@ -1033,44 +1394,64 @@ impl<'a> Gen<'a> {
         let mut leaves: Vec<(i32, i32, i32)> = Vec::new();
         match kind {
             0 | 1 | 3 | 5 | 6 | 7 | 10 | 11 => {
-                // designed canopies (layered discs, one leaf palette per species); the trunk stays visible below the crown
+                // solid rounded crowns: one big ellipsoid + lobes (clustered, lumpy silhouette), a short visible trunk,
+                // one leaf palette per species; kinds: 0 oak, 1 tall oak, 3 blossom, 5 willow, 6 birch, 7 maple, 10 apple, 11 orange
                 let big = sc > 1.12 || hs(2) > 0.55;
-                let (tmin, tvar, log, leaf) = match kind {
-                    0 => (4, 2.0, LOG_OAK, LEAVES_OAK),
-                    1 => (6, 3.0, LOG_OAK, LEAVES_OAK),
-                    3 => (3, 2.0, LOG_OAK, LEAVES_BLOSSOM),
-                    5 => (4, 2.0, LOG_OAK, LEAVES_WILLOW),
-                    6 => (6, 3.0, LOG_BIRCH, LEAVES_BIRCH),
-                    7 => (5, 2.0, LOG_OAK, LEAVES_MAPLE),
-                    10 => (3, 2.0, LOG_OAK, LEAVES_APPLE),
-                    _ => (3, 2.0, LOG_OAK, LEAVES_ORANGE),
+                let (log, leaf) = match kind {
+                    0 | 1 => (LOG_OAK, LEAVES_OAK),
+                    3 => (LOG_OAK, LEAVES_BLOSSOM),
+                    5 => (LOG_OAK, LEAVES_WILLOW),
+                    6 => (LOG_BIRCH, LEAVES_BIRCH),
+                    7 => (LOG_OAK, LEAVES_MAPLE),
+                    10 => (LOG_OAK, LEAVES_APPLE),
+                    _ => (LOG_OAK, LEAVES_ORANGE),
                 };
-                let radii = canopy_radii(kind, big);
-                let th = tmin + (hs(1) * tvar) as i32;
+                // (trunk height, crown rx, crown ry, lobes)
+                let (th, rx, ry, nl) = match kind {
+                    0 => if big { (3 + (hs(1) * 2.0) as i32, 4, 3, 4) } else { (2 + (hs(1) * 2.0) as i32, 3, 2, 3) },
+                    1 => (4 + (hs(1) * 3.0) as i32, 3, 3, 3),
+                    3 => (2 + (hs(1) * 2.0) as i32, if big { 4 } else { 3 }, 2, 4),
+                    5 => (2, 4, 2, 4),
+                    6 => (5 + (hs(1) * 3.0) as i32, 2, 3, 2),
+                    7 => if big { (3 + (hs(1) * 2.0) as i32, 4, 3, 4) } else { (3 + (hs(1) * 2.0) as i32, 3, 3, 3) },
+                    _ => (2 + (hs(1) * 2.0) as i32, 2, 2, 2),
+                };
                 for t in 1..=th {
                     self.put(ix, base + t, iz, log, true);
                     logs.push((ix, base + t, iz));
                 }
-                let y0 = base + th;
-                for (k, &r) in radii.iter().enumerate() {
-                    let lim = r * r + r / 2 + if r >= 3 { 1 } else { 0 };
-                    let y = y0 + k as i32;
-                    for dz in -r..=r {
-                        for dx in -r..=r {
-                            if dx * dx + dz * dz <= lim && self.put(ix + dx, y, iz + dz, leaf, false) {
-                                leaves.push((ix + dx, y, iz + dz));
-                            }
+                // root flare on big trunks
+                if th >= 3 && (kind == 0 || kind == 7) && big {
+                    for (rx_, rz_) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                        if hs(60 + rx_ * 2 + rz_) < 0.6 && blocks::is_ground(self.w.get_l(ix + rx_, base, iz + rz_)) && self.put(ix + rx_, base + 1, iz + rz_, log, false) {
+                            logs.push((ix + rx_, base + 1, iz + rz_));
                         }
                     }
                 }
+                let cy = base + th + ry;
+                let salt = ix * 7 + iz;
+                self.leaf_blob(&mut leaves, ix, cy, iz, rx, ry, leaf, salt);
+                // lobes around the rim, at slightly different heights
+                for i in 0..nl {
+                    let ang = i as f32 * (math::TAU / nl as f32) + hs(10 + i) * 1.4;
+                    let (sa, ca) = math::sin_cos(ang);
+                    let off = (rx - 1).max(1) as f32 + hs(30 + i) * 0.9;
+                    let (lx, lz) = (ix + (ca * off).round() as i32, iz + (sa * off).round() as i32);
+                    let ly = cy + (hs(20 + i) * 2.0) as i32 - 1;
+                    let lr = if kind == 6 { 1 } else { (rx - 1).max(2) };
+                    self.leaf_blob(&mut leaves, lx, ly, lz, lr, (ry - 1).max(1), leaf, salt + 3 + i);
+                }
+                // top cap for the tall crowns
+                if kind == 1 || kind == 6 || big {
+                    self.leaf_blob(&mut leaves, ix, cy + ry - 1, iz, (rx - 1).max(1), 1, leaf, salt + 9);
+                }
                 if kind == 5 {
-                    // willow curtains hang from the rim
-                    let rim_r = radii.iter().copied().max().unwrap_or(3);
+                    // willow curtains hang from the rim of the lower half
                     let snapshot = leaves.clone();
                     for (x, y, z) in snapshot {
-                        let rim = (x - ix) * (x - ix) + (z - iz) * (z - iz) >= rim_r * rim_r - 2;
-                        if rim && y <= y0 + 2 && u01(h3(self.seed, x, y, z)) < 0.5 {
-                            let len = 2 + (u01(h3(self.seed, z, y, x)) * 3.0) as i32;
+                        let rim = (x - ix) * (x - ix) + (z - iz) * (z - iz) >= rx * rx - 2;
+                        if rim && y <= cy && y > base + 1 && u01(h3(self.seed, x, y, z)) < 0.55 {
+                            let len = 1 + (u01(h3(self.seed, z, y, x)) * 2.0) as i32;
                             for k in 1..=len {
                                 if self.put(x, y - k, z, leaf, false) {
                                     leaves.push((x, y - k, z));
@@ -1300,6 +1681,7 @@ impl<'a> Gen<'a> {
 }
 
 /// Canopy disc radii, bottom -> top (rounded layered crowns; consecutive layers differ by <= 1 so they stay connected).
+#[allow(dead_code)]
 fn canopy_radii(kind: u32, big: bool) -> &'static [i32] {
     match kind {
         0 => {
@@ -1339,6 +1721,7 @@ pub fn build(g: &Generated, flora: &[f32], seed: u32) -> Built {
     gx.pond();
     gx.streams();
     let plans = gx.plan_cottages();
+    let plaza = gx.paths(&plans);
     gx.assemble();
     gx.notches();
     let caves = gx.caves();
@@ -1346,6 +1729,7 @@ pub fn build(g: &Generated, flora: &[f32], seed: u32) -> Built {
         gx.build_cottage(c);
     }
     let tree_count = gx.trees(flora);
+    gx.props(&plans, plaza);
     gx.w.biome.copy_from_slice(&gx.bio);
     gx.w.recompute_all();
     let decor = gx.decor(flora);

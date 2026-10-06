@@ -7,6 +7,7 @@
 import { Color, Vector3, type MeshToonMaterial } from 'three';
 import type { Ctx } from '../../engine/types';
 
+const SIL = typeof location !== 'undefined' && new URLSearchParams(location.search).has('sil');
 export const SLOTS = 16;
 export const VARIANTS = 3;
 
@@ -49,6 +50,7 @@ const FRAG_PARS = /* glsl */ `
 uniform vec3 uCrPal[${SLOTS * VARIANTS}];
 uniform vec4 uCrFx; // x bevel width . y bevel strength . z edge darkening . w emissive gain
 uniform float uCrNight;
+uniform float uCrSil;
 varying vec2 vCrUv;
 varying vec4 vCrVox;
 varying vec3 vCrT;
@@ -60,7 +62,8 @@ flat varying float vCrVar;
 const FRAG_COLOR = /* glsl */ `
 vec3 crAlb = uCrPal[ int( vCrVar + 0.5 ) * ${SLOTS} + int( vCrVox.x + 0.5 ) ] * vCrVox.y;
 float crAO = mix( 0.58, 1.0, vCrVox.z );
-diffuseColor.rgb = crAlb * crAO;
+float crLum = dot( crAlb, vec3( 0.299, 0.587, 0.114 ) );
+diffuseColor.rgb = mix( crAlb, vec3( crLum ) * vec3( 0.95, 1.0, 1.15 ), 0.5 * uCrNight ) * crAO;
 `;
 
 const FRAG_BEVEL = /* glsl */ `
@@ -82,7 +85,7 @@ const FRAG_EMIT = /* glsl */ `
 {
   float crEm = vCrVox.w;
   float crG = crEm >= 0.0 ? crEm * vCrGlow : -crEm;
-  totalEmissiveRadiance += crAlb * ( crG * uCrFx.w * ( 1.0 + 2.6 * uCrNight ) + 0.1 * uCrNight );
+  totalEmissiveRadiance += crAlb * ( crG * uCrFx.w * ( 1.0 + 4.2 * uCrNight ) + 0.1 * uCrNight );
 }
 `;
 
@@ -108,8 +111,11 @@ export function makeActorMaterial(ctx: Ctx, palettes: string[][], name: string):
     paint: 0,
     wobble: 0,
     edge: 0,
-    rim: 0.32,
-    shade: 0.2,
+    rim: 0.6,
+    rimPower: 2.4,
+    rimColor: '#FFE6C0',
+    shade: 0.4,
+    shadeTint: '#8472C4',
     bands: 3,
     softness: 0.2,
     weather: true,
@@ -135,6 +141,7 @@ export function makeActorMaterial(ctx: Ctx, palettes: string[][], name: string):
     shader.uniforms.uCrPal = { value: pal };
     shader.uniforms.uCrFx = fx;
     shader.uniforms.uCrNight = ctx.uniforms.uNight;
+    shader.uniforms.uCrSil = { value: SIL ? 1 : 0 };
     shader.vertexShader = replaceOnce(shader.vertexShader, 'void main() {', VERT_PARS + '\nvoid main() {', 'vertex main');
     shader.vertexShader = replaceOnce(shader.vertexShader, '#include <project_vertex>', VERT_MAIN, 'project_vertex');
     let fs: string = shader.fragmentShader;
@@ -142,9 +149,12 @@ export function makeActorMaterial(ctx: Ctx, palettes: string[][], name: string):
     fs = replaceOnce(fs, '#include <color_fragment>', FRAG_COLOR, 'color_fragment');
     fs = replaceOnce(fs, '#include <normal_fragment_maps>', FRAG_BEVEL, 'normal_fragment_maps');
     fs = replaceOnce(fs, '#include <emissivemap_fragment>', FRAG_EMIT, 'emissivemap_fragment');
+    // silhouette gate (?sil=1): every actor pure black, for the 32 / 64 px readability check
+    const e = fs.lastIndexOf('}');
+    if (e > 0) fs = fs.slice(0, e) + '  if ( uCrSil > 0.5 ) gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );\n}' + fs.slice(e + 1);
     shader.fragmentShader = fs;
   };
-  material.customProgramCacheKey = () => 'gw-voxactor-1';
+  material.customProgramCacheKey = () => 'gw-voxactor-2';
   void fxVec;
   return { material, pal, fx, setPalette };
 }

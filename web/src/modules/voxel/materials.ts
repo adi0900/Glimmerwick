@@ -27,6 +27,15 @@ flat varying float vVoxTF;
 `;
 
 const VERT_MAIN = /* glsl */ `
+#if defined( GW_WIND ) && defined( GW_SWAY_ATTR )
+{
+  // leaf flutter: short travelling waves (smooth in world space, so faces never tear) on top of the engine's gust field
+  float gwFp = dot( gwWp0.xz, vec2( 0.83, 1.17 ) ) + gwWp0.y * 0.9 + uWindTime * 2.3;
+  float gwFq = dot( gwWp0.xz, vec2( -1.1, 0.7 ) ) - uWindTime * 1.6;
+  transformed.xz += aSway * vec2( sin( gwFp ) * 0.075 + sin( gwFq * 0.5 ) * 0.05, cos( gwFp * 0.8 + 1.3 ) * 0.075 );
+  transformed.y += aSway * sin( gwFp * 1.3 + gwFq ) * 0.035;
+}
+#endif
 #include <project_vertex>
 {
   int gwc = gl_VertexID & 3;
@@ -224,7 +233,7 @@ export function makeBlockMaterial(ctx: Ctx, tiles: DataArrayTexture, waterY: num
     softness: 0.16,
     weather: true,
     cloudShadow: true,
-    wind: { amp: 0.09, speed: 1.0, attr: true },
+    wind: { amp: 0.22, speed: 1.5, attr: true },
     name: 'voxel',
   });
   const vox = new Vector4(0.09, 0.75, waterY, 0);
@@ -244,7 +253,7 @@ export function makeBlockMaterial(ctx: Ctx, tiles: DataArrayTexture, waterY: num
     fs = replaceOnce(fs, '#include <opaque_fragment>', FRAG_FLOOR, 'opaque_fragment');
     shader.fragmentShader = fs;
   };
-  material.customProgramCacheKey = () => 'gw-voxel-4';
+  material.customProgramCacheKey = () => 'gw-voxel-5';
   return { material, vox };
 }
 

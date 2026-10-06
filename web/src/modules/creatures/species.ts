@@ -28,19 +28,29 @@ interface EyeInk {
   white: number;
   /** bottom-row brightening of the iris (same hue), default 1.3 */
   lift?: number;
+  /** soft-pupil style (no dark frame): the whole eye is this slot x pupilH, only the bottom row shows the iris */
+  pupil?: number;
+  pupilH?: number;
+  /** custom right / left eye patterns (same legend); default EYE_R / EYE_L */
+  rows?: [string[], string[]];
 }
 
-/** stamp both eyes into part `eyes`: the right eye covers cells xr..xr+4 (viewer's right), the left one is its mirror */
+/** stamp both eyes into part eyes: the right eye covers cells xr.. (viewer right), the left one is its mirror */
 function eyes(s: Sculpt, head: string, xr: number, yTop: number, ink: EyeInk): void {
+  const pu = ink.pupil;
+  const ph = ink.pupilH ?? 1;
   const lg: Record<string, Paint> = {
-    O: P(ink.line),
-    I: P(ink.iris, 1, -0.14),
+    O: pu !== undefined ? P(pu, ph, -0.04) : P(ink.line),
+    I: pu !== undefined ? P(pu, ph, -0.08) : P(ink.iris, 1, -0.14),
     i: P(ink.iris, ink.lift ?? 1.3, -0.24),
     W: P(ink.white, 1.0, -0.28),
     w: P(ink.white, 0.95, -0.18),
   };
-  s.decal({ on: head, into: 'eyes', x: xr, y: yTop, rows: EYE_R, legend: lg });
-  s.decal({ on: head, into: 'eyes', x: -xr - 5, y: yTop, rows: EYE_L, legend: lg });
+  const R = ink.rows?.[0] ?? EYE_R;
+  const L = ink.rows?.[1] ?? EYE_L;
+  const w = R[0]!.length;
+  s.decal({ on: head, into: 'eyes', x: xr, y: yTop, rows: R, legend: lg });
+  s.decal({ on: head, into: 'eyes', x: -xr - w, y: yTop, rows: L, legend: lg });
 }
 
 /** centred (symmetric) mouth pattern; rows[0] is the top row at height y */
@@ -53,6 +63,12 @@ function blush(s: Sculpt, head: string, xr: number, y: number, col: Paint): void
   s.decal({ on: head, x: xr, y, rows: ['BB', 'BB'], legend: { B: col } });
   s.decal({ on: head, x: -xr - 2, y, rows: ['BB', 'BB'], legend: { B: col } });
 }
+
+/** avatar eye: 4x4 dark-brown oval, 2x1 highlight upper-left, a lighter iris crescent at the bottom (no white frame) */
+const AV_EYE = ['.II.', 'IWWI', 'IIwI', '.ii.'];
+/** soft oval eye for the creatures: 4 wide x 5 tall, big 2x2 highlight upper-left, iris crescent under it, no frame */
+const EYE45 = ['.II.', 'IWWI', 'IWWI', 'IIwI', '.ii.'];
+const SMILE4 = ['M..M', '.MM.'];
 
 const N6: V3[] = [
   [1, 0, 0],
@@ -187,25 +203,25 @@ export const PUFFBUN: ModelDef = {
 };
 
 // ------------------------------------------------------------------------------------------------ Tidler
-const TD = { MAIN: 0, BELLY: 1, CORAL: 2, GLOW: 3, DARK: 4, IRIS: 5, WHITE: 6, MOUTH: 7, FIN: 8, PAD: 9 };
+const TD = { MAIN: 0, BELLY: 1, CORAL: 2, GLOW: 3, DARK: 4, IRIS: 5, WHITE: 6, MOUTH: 7, FIN: 8, PAD: 9, PUPIL: 10 };
 
+/** ONE iconic idea: a fat round tail fin that curls up behind the body (3 swaying segments), plus two small side gills. */
 function buildTidler(s: Sculpt): void {
-  const { MAIN, BELLY, CORAL, GLOW, DARK, IRIS, WHITE, MOUTH, FIN, PAD } = TD;
+  const { MAIN, BELLY, CORAL, GLOW, IRIS, WHITE, MOUTH, FIN, PAD, PUPIL } = TD;
   s.ellipsoid('body', [0, 6.8, -3.5], [6.9, 5.2, 10.5], P(MAIN), { n: 2.2 });
   s.recolor(['body'], (c) => (c.ny < -0.25 || c.y < 4.2 ? P(BELLY) : null));
 
-  // head: one soft ellipsoid, no cap, wide enough for the 5x5 eyes
+  // head: one soft ellipsoid; only the chin underside is cream (so the mouth sits on the main colour)
   s.ellipsoid('head', [0, 9.4, 8.0], [7.5, 6.6, 6.0], P(MAIN), { n: 2.1 });
-  s.recolor(['head'], (c) => (c.ny < -0.3 && c.y < 7 ? P(BELLY) : null));
+  s.recolor(['head'], (c) => (c.ny < -0.7 && c.y < 4.2 ? P(BELLY) : null));
 
-  // gill fronds (3 per side): round tapering stalks with glowing tips (no flat cards)
-  const gillPaint = (c: PaintCtx): Paint => (c.t > 0.72 ? P(GLOW, 1, 0.85) : P(CORAL));
+  // gills: two round tapering fronds per side, glowing only at the very tip
+  const gillPaint = (c: PaintCtx): Paint => (c.t > 0.8 ? P(GLOW, 1, 0.85) : P(CORAL));
   for (const sx of [1, -1]) {
     const part = sx > 0 ? 'gillR' : 'gillL';
     const base: V3 = [sx * 6.4, 10.6, 6.0];
-    s.taper(part, base, [sx * 11.4, 16.4, 3.8], 2.1, 1.0, gillPaint, { flat: 0.85 });
-    s.taper(part, base, [sx * 13.8, 11.6, 3.4], 2.1, 1.0, gillPaint, { flat: 0.85 });
-    s.taper(part, base, [sx * 11.8, 6.6, 4.2], 2.1, 1.0, gillPaint, { flat: 0.85 });
+    s.taper(part, base, [sx * 12.2, 15.6, 4.2], 2.7, 1.2, gillPaint, { flat: 0.85 });
+    s.taper(part, base, [sx * 13.4, 10.2, 4.0], 2.7, 1.2, gillPaint, { flat: 0.85 });
   }
 
   // stubby legs
@@ -217,23 +233,29 @@ function buildTidler(s: Sculpt): void {
     s.ellipsoid(`legB${n}`, [sx * 6.0, 0.9, -6.8], [2.5, 1.0, 3.0], P(PAD));
   }
 
-  // short tail ending in a round fin
-  s.capsule('tail1', [0, 7.0, -12.0], [0, 6.6, -15.6], 4.0, 3.0, P(MAIN));
-  s.recolor(['tail1'], (c) => (c.ny < -0.3 ? P(BELLY) : null));
-  s.ellipsoid('tail2', [0, 6.4, -19.4], [1.3, 4.6, 4.2], (c) => (c.r > 0.78 ? P(CORAL) : P(FIN)), { n: 2.4 });
+  // tail: three segments curling up, ending in a big round fin with a coral rim + glowing emblem
+  const under = (c: { ny: number }): Paint | null => (c.ny < -0.35 ? P(BELLY) : null);
+  s.capsule('tail1', [0, 7.0, -11.0], [0, 7.6, -16.5], 3.9, 3.1, P(MAIN));
+  s.recolor(['tail1'], under);
+  s.capsule('tail2', [0, 7.6, -16.5], [0, 10.8, -20.2], 3.1, 2.5, P(MAIN));
+  s.recolor(['tail2'], under);
+  s.capsule('tail3', [0, 10.8, -20.2], [0, 15.6, -20.6], 2.5, 2.1, P(MAIN));
+  s.ellipsoid('tail3', [0, 19.4, -17.8], [3.9, 4.5, 4.9], (c) => (c.r > 0.86 ? P(CORAL) : P(FIN)), { n: 2.2 });
+  s.decal({ on: 'tail3', dir: '+x', x: -16, y: 21, rows: ['.G.', 'GGG', '.G.'], legend: { G: P(GLOW, 1, 0.85) } });
+  s.decal({ on: 'tail3', dir: '-x', x: -18, y: 21, rows: ['.G.', 'GGG', '.G.'], legend: { G: P(GLOW, 1, 0.85) } });
 
-  // dorsal crest: ONE tapering 3-step ridge (3 -> 2 -> 1 high, 2 wide) fused to the back, glowing cap every 4th step
-  for (let z = 1; z >= -14; z--) {
-    const h = z > -3 ? 3 : z > -9 ? 2 : 1;
+  // dorsal crest: one low tapering ridge (3 -> 2 -> 1), glowing cap every 4th step
+  for (let z = 1; z >= -10; z--) {
+    const h = z > -2 ? 3 : z > -6 ? 2 : 1;
     const cap = (((z % 4) + 4) % 4) === 1;
     for (const x of [-1, 0]) stackOn(s, 'body', x, z, h, (k) => (k === h - 1 && cap ? P(GLOW, 1, 0.85) : P(CORAL)));
   }
 
   despeckle(s);
 
-  // face: shared eyes, wide up-turned grin, two cheek blushes
-  eyes(s, 'head', 1, 11, { line: DARK, iris: IRIS, white: WHITE });
-  mouth(s, 'head', SMILE8, 5, P(MOUTH));
+  // face: soft pupils (no frame), small 6-voxel smile on the main colour, cheek blushes beside the mouth
+  eyes(s, 'head', 2, 12, { line: PUPIL, iris: IRIS, white: WHITE, lift: 1.15, pupil: PUPIL, rows: [EYE45, EYE45] });
+  mouth(s, 'head', SMILE6, 6, P(MOUTH));
   blush(s, 'head', 5, 7, P(CORAL, 1.05));
 
   // glowing markings (designed shapes, >= 2 voxels)
@@ -251,12 +273,6 @@ function buildTidler(s: Sculpt): void {
     [-5, 6],
   ] as const)
     for (let dx = 0; dx < 2; dx++) s.topCell('head', x + dx, z, P(GLOW, 1, 0.85));
-  for (const [y, z] of [
-    [6, -18],
-    [8, -21],
-    [4, -21],
-  ] as const)
-    for (const x of [0, -1]) s.put('tail2', x, y, z, P(GLOW, 1, 0.85));
 }
 
 export const TIDLER: ModelDef = {
@@ -272,13 +288,14 @@ export const TIDLER: ModelDef = {
     { name: 'legFL', parent: 'body', pivot: [-5, 5.2, 4] },
     { name: 'legBR', parent: 'body', pivot: [5, 5.2, -8.5] },
     { name: 'legBL', parent: 'body', pivot: [-5, 5.2, -8.5] },
-    { name: 'tail1', parent: 'body', pivot: [0, 7, -12] },
-    { name: 'tail2', parent: 'tail1', pivot: [0, 6.5, -15.6] },
+    { name: 'tail1', parent: 'body', pivot: [0, 7, -11] },
+    { name: 'tail2', parent: 'tail1', pivot: [0, 7.6, -16.5] },
+    { name: 'tail3', parent: 'tail2', pivot: [0, 10.8, -20.2] },
   ],
   palettes: [
-    ['#38C0D0', '#FFF1D8', '#FF8A7A', '#8CFFF0', '#1B2B45', '#E09A18', '#FFFFFF', '#5A2F45', '#66D6E0', '#FFE2BC'],
-    ['#FFB466', '#FFF4DA', '#FF6A7C', '#FFF09A', '#3A2118', '#8A2A8C', '#FFFFFF', '#6A2F2F', '#FFCF92', '#FFE8C8'],
-    ['#9082F5', '#F0EBFF', '#FF9AD2', '#6FF3FF', '#1E1A45', '#D98E10', '#FFFFFF', '#4F2F6A', '#B5A9FB', '#E2DCFF'],
+    ['#38C0D0', '#FFF1D8', '#FF8A7A', '#8CFFF0', '#1B2B45', '#E09A18', '#FFFFFF', '#3A1F4A', '#66D6E0', '#FFE2BC', '#2A2352'],
+    ['#FFB466', '#FFF4DA', '#FF6A7C', '#FFF09A', '#3A2118', '#C04AC0', '#FFFFFF', '#4A2020', '#FFCF92', '#FFE8C8', '#3A1F4A'],
+    ['#9082F5', '#F0EBFF', '#FF9AD2', '#6FF3FF', '#1E1A45', '#E8A020', '#FFFFFF', '#3F2060', '#B5A9FB', '#E2DCFF', '#2A2060'],
   ],
   build: buildTidler,
 };
@@ -324,16 +341,16 @@ function buildSprigfox(s: Sculpt): void {
   const Bp: V3 = [0, 22.0, -20.2];
   const C: V3 = [0, 26.0, -17.0];
   const D: V3 = [0, 27.8, -12.8];
-  s.capsule('tail2', T, A, 2.4, 2.0, P(LEAF));
+  s.capsule('tail2', T, A, 2.6, 2.0, (c) => (c.t < 0.55 ? P(FUR) : P(LEAF)));
   s.capsule('tail2', A, Bp, 2.0, 1.8, P(LEAF));
   s.capsule('tail2', Bp, C, 1.8, 1.5, P(LEAF));
   s.capsule('tail2', C, D, 1.5, 1.1, P(LEAF));
   const tier = (col: number) => (c: PaintCtx): Paint => (c.t > 0.74 ? P(GLOW, 1, 0.9) : P(col));
   const th: V3 = [0, 0, 1];
   for (const sx of [1, -1]) {
-    s.leaf('tail2', A, [sx * 7.4, 16.4, -24.6], 2.4, th, tier(STEM), 0.75);
-    s.leaf('tail2', Bp, [sx * 6.8, 23.0, -25.4], 2.2, th, tier(LEAF), 0.75);
-    s.leaf('tail2', C, [sx * 5.4, 28.0, -21.6], 1.8, th, tier(LEAF2), 0.75);
+    s.leaf('tail2', A, [sx * 5.8, 16.4, -23.6], 2.4, th, tier(STEM), 0.75);
+    s.leaf('tail2', Bp, [sx * 5.4, 23.0, -24.6], 2.2, th, tier(LEAF), 0.75);
+    s.leaf('tail2', C, [sx * 4.4, 27.6, -21.0], 1.8, th, tier(LEAF2), 0.75);
   }
   s.leaf('tail2', C, [0, 30.0, -14.2], 1.8, [0, 0, 1], tier(LEAF2), 0.75);
 
@@ -351,10 +368,9 @@ function buildSprigfox(s: Sculpt): void {
     }
 
   // face: shared eyes, small nose, cat 'w' mouth on the muzzle; glowing chest glyph
-  eyes(s, 'head', 1, 19, { line: EYE, iris: IRIS, white: WHITE, lift: 1.4 });
-  s.decal({ on: 'head', x: -1, y: 14, rows: ['NN'], legend: { N: P(NOSE, 1, 0.1) } });
-  mouth(s, 'head', OMEGA6, 12, P(NOSE));
-  s.decal({ on: 'body', x: -2, y: 8, rows: ['.GG.', 'GGGG', '.GG.'], legend: { G: P(GLOW, 1, 0.95) } });
+  eyes(s, 'head', 2, 19, { line: IRIS, iris: IRIS, white: WHITE, lift: 1.6, pupil: IRIS, pupilH: 0.55, rows: [EYE45, EYE45] });
+  s.decal({ on: 'head', x: -1, y: 14, rows: ['NN'], legend: { N: P(EYE, 0.85) } });
+  mouth(s, 'head', SMILE4, 12, P(EYE, 1.1));
 }
 
 export const SPRIGFOX: ModelDef = {
@@ -402,8 +418,10 @@ function buildAvatar(s: Sculpt): void {
   }
   s.ellipsoid('head', [0, 20.8, 0.2], [7.3, 6.5, 6.7], P(SKIN), { n: 2.5 });
   for (const sx of [1, -1]) s.ellipsoid('head', [sx * 7.2, 20.4, 0], [1.4, 2.2, 1.8], P(SKIN));
-  s.ellipsoid('head', [0, 22.6, -0.6], [7.9, 6.2, 7.6], (c) => (c.y < 18.6 || (c.nz > 0.3 && c.y < 24.2) ? null : P(HAIR)), { n: 2.5 });
-  s.capsule('hair', [0, 23.0, -6.5], [0, 16.5, -10.0], 3.0, 1.4, (c) => (c.t < 0.2 ? P(TRIM) : P(HAIR)));
+  // squarer jaw: a rounded block under the cheeks so the chin row is clean
+  s.box('head', [0, 17.2, 0.3], [10.4, 5.4, 8.8], P(SKIN), { round: 1.8 });
+  s.box('head', [0, 22.4, -0.8], [15.8, 13.6, 15.4], (c) => (c.nz > 0.3 && c.y < 24.2 ? null : c.y < (c.nz < -0.15 ? 16.9 : 18.6) ? null : P(HAIR, c.ny > 0.55 ? 1.1 : 1)), { round: 4.2 });
+  s.capsule('hair', [0, 22.0, -7.4], [0, 16.0, -10.6], 3.0, 1.5, (c) => P(HAIR, 0.94));
   s.box('pack', [0, 11.4, -5.6], [8.0, 9.2, 4.2], (c) => (c.y > 13.4 ? P(PACK2) : P(PACK)), { round: 1.1 });
 
   despeckle(s);
@@ -411,8 +429,8 @@ function buildAvatar(s: Sculpt): void {
   s.decal({ on: 'body', x: -1, y: 12, rows: ['GG', 'GG'], legend: { G: P(GLOW, 1, 0.9) } });
   s.decal({ on: 'pack', dir: '-z', x: 0, y: 11, rows: ['GG'], legend: { G: P(GLOW, 1, 0.9) } });
   // face: side locks frame the forehead, shared eyes, a real 6-voxel smile, 2-voxel blush per cheek
-  eyes(s, 'head', 1, 23, { line: EYE, iris: IRIS, white: WHITE, lift: 1.6 });
-  mouth(s, 'head', SMILE6, 17, P(MOUTH));
+  eyes(s, 'head', 1, 23, { line: EYE, iris: IRIS, white: WHITE, lift: 1.5, pupil: EYE, rows: [AV_EYE, AV_EYE] });
+  mouth(s, 'head', SMILE4, 17, P(MOUTH));
   s.decal({ on: 'head', x: 4, y: 18, rows: ['BB'], legend: { B: P(BLUSH, 1.02) } });
   s.decal({ on: 'head', x: -6, y: 18, rows: ['BB'], legend: { B: P(BLUSH, 1.02) } });
 }

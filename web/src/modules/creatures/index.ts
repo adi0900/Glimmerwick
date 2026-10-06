@@ -73,6 +73,12 @@ function layout(set: string): LabActor[] {
     out.push(actor({ id: id++, avatar: true, x: 0, z: -2.0, yaw: 0.1 }));
     for (let s = 0; s < 3; s++)
       [0.65, 1.0, 1.45].forEach((k, i) => out.push(actor({ id: id++, species: s, variant: i, x: (s - 1) * 3.6 + [-0.8, 0.1, 1.15][i]!, z: 0.6, yaw: 0.25, scale: bs[s]! * k })));
+  } else if (set === 'play') {
+    // gameplay-camera set: the explorer from behind at follow distance, three creatures ahead of them
+    out.push(actor({ id: id++, avatar: true, x: 0, z: 0, yaw: Math.PI }));
+    out.push(actor({ id: id++, species: 0, x: -1.3, z: -1.9, yaw: 0.35, scale: bs[0]!, state: 3 }));
+    out.push(actor({ id: id++, species: 1, x: 0.5, z: -1.5, yaw: -0.2, scale: bs[1]! }));
+    out.push(actor({ id: id++, species: 2, x: 1.9, z: -2.2, yaw: -0.5, scale: bs[2]!, state: 5, emote: 2 }));
   } else if (set === 'faces') {
     // face sheet: avatar + the three species side by side, nearly frontal, species enlarged so every head is ~0.5 m wide
     out.push(actor({ id: id++, avatar: true, x: -1.5, yaw: 0.1 }));
@@ -115,7 +121,9 @@ interface Stage {
 function findStage(ctx: Ctx): Stage {
   const w = ctx.game.world;
   const info = w.info as any;
-  const spawn: [number, number] = info?.spawn?.player ?? [0, 0];
+  const spawn: [number, number] = info?.spawn?.village ?? info?.spawn?.player ?? [0, 0];
+  // the lab needs open sky: stay out of forest-floor habitats (block trees now stand there)
+  const forest = ((info?.habitats?.['4'] ?? info?.habitats?.[4] ?? []) as number[][]).filter((f) => Array.isArray(f));
   const pond = info?.water?.pond as { x: number; z: number; rx?: number; rz?: number } | undefined;
   let best = { x: spawn[0], z: spawn[1], score: 1e9 };
   for (let dx = -36; dx <= 36; dx += 3)
@@ -131,6 +139,7 @@ function findStage(ctx: Ctx): Stage {
           hi = Math.max(hi, h);
         }
       let pen = lo < 0.6 ? 100 : 0;
+      if (forest.some((f) => Math.hypot(cx - f[0]!, cz - f[1]!) < (f[2] ?? 10) + 9)) pen += 100;
       if (pond && Math.hypot(cx - pond.x, cz - pond.z) < Math.max(pond.rx ?? 14, pond.rz ?? 14) + 12) pen += 100;
       const score = (hi - lo) * 10 + Math.hypot(dx, dz) * 0.04 + pen;
       if (score < best.score) best = { x: cx, z: cz, score };
@@ -192,6 +201,8 @@ class Lab {
     c.group = { pos: L(0.6, 1.7, 8.4), target: L(0, 0.35, -0.6), fov: 42 };
     c.groupLow = { pos: L(-2.4, 0.7, 6.6), target: L(0.2, 0.55, -0.6), fov: 46 };
     c.faces = { pos: L(0, 0.62, 6.0), target: L(0, 0.55, 0), fov: 26 };
+    c.far32 = { pos: L(0.1, 3.2, 13.0), target: L(-0.1, 0.45, 0), fov: 46 };
+    c.gameplay = { pos: L(0.3, 2.1, 4.9), target: L(0.2, 0.7, -2.4), fov: 50 };
     c.tread = { pos: L(0, 0.4, 3.7), target: L(0, 0.25, 0), fov: 30 };
     c.states = { pos: L(0, 1.9, 5.6), target: L(0, 0.3, -1.4), fov: 34 };
     const near = (i: number, dist: number, h: number, az: number, fov: number, ty: number): GalleryCam => {
@@ -217,6 +228,7 @@ class Lab {
       c.facePuffbun = near(1, 1.55, 0.45, 0.15, 22, 0.45);
       c.faceTidler = near(2, 1.45, 0.3, 0.15, 22, 0.27);
       c.faceSprigfox = near(3, 1.3, 0.38, 0.15, 22, 0.36);
+      c.avatarBack = near(0, 2.4, 0.85, Math.PI + 0.25, 28, 0.78);
       c.back = { pos: L(0.2, 1.2, -5.6), target: L(0, 0.5, 0), fov: 30 };
     }
   }

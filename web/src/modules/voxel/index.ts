@@ -10,6 +10,7 @@ import { defineModule } from '../../engine/types';
 import { lookState } from '../../engine/Lighting';
 import { buildAtlas } from './atlas';
 import { makeBlockMaterial, makeWaterMaterial, type BlockMaterial, type WaterMaterial } from './materials';
+import { createFx, type VoxFx } from './fx';
 import { Mesher, REGION, type SolidMesh, type VoxInfo, type WaterMesh } from './mesher';
 
 interface BlockDef {
@@ -390,6 +391,8 @@ function deriveCams(ctx: Ctx): Record<string, GalleryCam> {
   return cams;
 }
 
+let fx: VoxFx | null = null;
+
 const mod = defineModule({
   name: 'voxel',
   order: 40,
@@ -421,6 +424,9 @@ const mod = defineModule({
     const root = new Group();
     root.name = 'voxel.root';
     ctx.scene.add(root);
+    const colors = new Uint8Array(256 * 3);
+    for (const b of blocks as any[]) if (b.color) colors.set(b.color, b.id * 3);
+    fx = createFx(root, info, flags, colors);
     const block = makeBlockMaterial(ctx, atlas.texture, -0.12);
     const water = makeWaterMaterial(ctx);
     const rw = info.ncx / 2;
@@ -474,9 +480,10 @@ const mod = defineModule({
     if (params.get('voxdemo')) setupDemo(ctx, s);
   },
 
-  update(ctx) {
+  update(ctx, dt) {
     const s = S;
     if (!s) return;
+    fx?.update(ctx, dt);
     s.block.vox.w = ctx.uniforms.uTime.value as number;
     {
       // DOF focus = distance to what the camera looks at (exact voxel hit, not the flat-ground guess); Lighting.follow reads it
@@ -524,6 +531,8 @@ const mod = defineModule({
   },
 
   dispose() {
+    fx?.dispose();
+    fx = null;
     if (!S) return;
     for (const r of S.regions) {
       dropMesh(S, r.solid);
