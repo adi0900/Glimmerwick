@@ -89,8 +89,8 @@ const SCRIPT: Key[] = [
   { h: 8.0, sun: '#FFE9C2', sunI: 2.4, zenith: '#62B0F5', horizon: '#D5EEFF', hemiSky: '#A7D2FF', hemiGround: '#8CB07A', fog: '#CFE8FF', fogD: 0.008, hemiI: 1.25 },
   { h: 12.0, sun: '#FFF6E0', sunI: 2.5, zenith: '#4FA3F0', horizon: '#CFEAFF', hemiSky: '#9CCBFF', hemiGround: '#9BC27E', fog: '#C8E6FF', fogD: 0.006, hemiI: 1.15 },
   { h: 16.5, sun: '#FFCB80', sunI: 3.0, zenith: '#4F90E0', horizon: '#FFD6A4', hemiSky: '#A3B6EC', hemiGround: '#B09A66', fog: '#FFD7A6', fogD: 0.009, hemiI: 1.3 },
-  { h: 18.5, sun: '#FF9A5A', sunI: 3.1, zenith: '#5E52C8', horizon: '#FFA070', hemiSky: '#7C8AD6', hemiGround: '#8A5E6A', fog: '#F9A07A', fogD: 0.013, hemiI: 1.5 },
-  { h: 20.0, sun: '#C98AE6', sunI: 0.7, zenith: '#3B3F9C', horizon: '#E58AB0', hemiSky: '#5B5FB8', hemiGround: '#4A4A7A', fog: '#8C6AA0', fogD: 0.016, hemiI: 2.2 },
+  { h: 18.5, sun: '#FF9650', sunI: 3.1, zenith: '#3F6CC0', horizon: '#FFA264', hemiSky: '#7E98D2', hemiGround: '#9A6A50', fog: '#FBA070', fogD: 0.012, hemiI: 1.45 },
+  { h: 20.0, sun: '#E8A0C8', sunI: 0.7, zenith: '#2B4A9C', horizon: '#F29078', hemiSky: '#5C72BC', hemiGround: '#5A4C70', fog: '#A87898', fogD: 0.015, hemiI: 2.2 },
   { h: 23.0, ...NIGHT },
   { h: 28.0, ...NIGHT },
 ];
@@ -294,16 +294,17 @@ void main() {
 
   // ---- sun disc + moon (occluded by the clouds)
   float vis = ( 1.0 - alpha ) * ( 1.0 - uGrey * 0.7 );
-  float discR = mix( 0.99955, 0.9990, lowSun );
+  float discR = mix( 0.9993, 0.9982, lowSun );
   float disc = smoothstep( discR, discR + 0.00033, sd ) * sunUp;
   col += uSunCol * disc * 9.0 * vis;
+  col += uSunCol * pow( sd, 14.0 ) * 0.5 * lowSun * sunUp * vis;
   float md = max( dot( d, uMoon ), 0.0 );
   float moonUp = smoothstep( -0.05, 0.08, uMoon.y );
-  col += vec3( 0.45, 0.55, 0.95 ) * ( pow( md, 40.0 ) * 0.28 + pow( md, 8.0 ) * 0.06 ) * moonUp * uNightK * vis;
-  float moonDisc = smoothstep( 0.99935, 0.99965, md );
+  col += vec3( 0.50, 0.60, 1.0 ) * ( pow( md, 300.0 ) * 0.9 + pow( md, 40.0 ) * 0.40 + pow( md, 8.0 ) * 0.12 ) * moonUp * uNightK * vis;
+  float moonDisc = smoothstep( 0.99840, 0.99865, md );
   if ( moonDisc > 0.0 ) {
     float maria = gwFbm3( d * 38.0 ) * 0.5 + 0.5;
-    col += vec3( 0.86, 0.92, 1.0 ) * ( 0.75 + 0.25 * maria ) * moonDisc * 3.2 * moonUp * vis;
+    col += vec3( 0.86, 0.92, 1.0 ) * ( 0.75 + 0.25 * maria ) * moonDisc * 4.2 * moonUp * vis;
   }
 
   // ---- weather grading
@@ -577,7 +578,12 @@ export class Lighting {
     grade(fg, w.dark * 0.7);
     u.uSunColor.value.copy(f.sun);
     u.uSunDir.value.copy(this.keyDir);
-    (u as any).uSunTrue.value.copy(sunDir);
+    // the sim's sun is on the horizon at 18:00 and 12 degrees under it at 18:30: lift the DISPLAYED sun (sky disc, halo, haze tint) so the
+    // setting sun stays visible through ~18:40 (the light colours already follow the keyframe script)
+    const ly = sunDir.y;
+    const lift = 0.17 * smoothstep(-0.35, -0.05, ly) * (1 - smoothstep(0.05, 0.45, ly));
+    this.tmpB.set(sunDir.x, ly + lift, sunDir.z).normalize();
+    (u as any).uSunTrue.value.copy(this.tmpB);
     const T = this.tuning;
     const sunMul = T.sunScale + (T.nightSun - T.sunScale) * night;
     const hemiMul = T.hemiScale + (T.nightHemi - T.hemiScale) * night;
@@ -616,7 +622,7 @@ export class Lighting {
 
     // ---- sky
     const su = this.skyMat.uniforms;
-    (su.uSunTrue!.value as Vector3).copy(sunDir);
+    (su.uSunTrue!.value as Vector3).copy(this.tmpB);
     (su.uMoon!.value as Vector3).set(-sunDir.x, -sunDir.y, -sunDir.z).normalize();
     su.uCover!.value = cl.cover;
     su.uGrey!.value = w.grey;

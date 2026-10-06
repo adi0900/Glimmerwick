@@ -1,0 +1,14 @@
+{
+  "module": "creatures",
+  "round": 3,
+  "scores": {"1": 7, "2": 8, "3": 6, "4": 7, "5": 7, "6": 7, "7": 7, "8": 7, "9": 8},
+  "pass": false,
+  "top_defects": [
+    "Avatar back/hair is a black slab with ragged spikes and holes; close-up face has maroon sockets, no pupils, heavy jaw (26, avatar_strip, 21)",
+    "Sprigfox face (pupil-less green-ringed eyes, muddy muzzle) and cluttered head: ears + inner stripes + sprout + plume (20, 05, 29)",
+    "Tidler lollipop/periscope tail bulb with bobbing separate from body, deadpan slot mouth and worried pupils (25, hop strip, 19)",
+    "Materials still painted cubes: no fur/scale/tuft cues, Puffbun mouth cluster, mauve shade mud on Puffbun flank (18, 05, 01)",
+    "In-game readability and motion amplitude: live creature 40 px behind blocks, faces 6-8 px at gameplay camera, torso rigid in walk, no visible landing squash (live.png, 22, walk strip)"
+  ],
+  "plateau": false
+}

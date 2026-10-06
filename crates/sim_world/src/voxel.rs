@@ -638,9 +638,9 @@ impl<'a> Gen<'a> {
                     self.wl[c] = (water_y + SEA_Y - 1) as i16;
                     self.bed[c] = if e < 0.4 { 4 } else { 2 };
                     self.bio[c] = biome::POND_BANK;
-                } else if rim < 1.3 {
+                } else if rim < 1.3 + 0.12 * (value_noise(self.seed ^ 0x9D4, wx * 0.35, wz * 0.35) - 0.5) {
                     self.h[c] = self.h[c].max(water_y);
-                    if rim < 1.14 {
+                    if rim < 1.12 + 0.3 * (value_noise(self.seed ^ 0x9D3, wx * 0.45, wz * 0.45) - 0.4) {
                         self.bio[c] = biome::POND_BANK;
                     }
                 }
@@ -1157,7 +1157,7 @@ impl<'a> Gen<'a> {
             if let Some(first) = v.first_mut() {
                 *first = [px, pz];
             }
-            self.stamp_path(&v, 11 + k as u32 * 7, 3.4, 1.0);
+            self.stamp_path(&v, 11 + k as u32 * 7, 3.4, 1.5);
         }
         // door walks: plaza -> in front of each door
         for (k, c) in plans.iter().enumerate() {
@@ -1176,7 +1176,7 @@ impl<'a> Gen<'a> {
                     [ex + (px - ex) * t, ez + (pz - ez) * t]
                 })
                 .collect();
-            self.stamp_path(&pts, 101 + k as u32 * 13, 1.6, 0.55);
+            self.stamp_path(&pts, 101 + k as u32 * 13, 1.6, 0.95);
         }
         // cobble plaza with a noisy rim
         let r = 5;
@@ -1397,14 +1397,15 @@ impl<'a> Gen<'a> {
                 // solid rounded crowns: one big ellipsoid + lobes (clustered, lumpy silhouette), a short visible trunk,
                 // one leaf palette per species; kinds: 0 oak, 1 tall oak, 3 blossom, 5 willow, 6 birch, 7 maple, 10 apple, 11 orange
                 let big = sc > 1.12 || hs(2) > 0.55;
+                let tv = h3(self.seed, ix, base, iz) % 5; // species accents (blossom / maple / orange) stay rare: one tonal family
                 let (log, leaf) = match kind {
                     0 | 1 => (LOG_OAK, LEAVES_OAK),
-                    3 => (LOG_OAK, LEAVES_BLOSSOM),
+                    3 => (LOG_OAK, if tv == 0 { LEAVES_BLOSSOM } else { LEAVES_OAK }),
                     5 => (LOG_OAK, LEAVES_WILLOW),
                     6 => (LOG_BIRCH, LEAVES_BIRCH),
-                    7 => (LOG_OAK, LEAVES_MAPLE),
-                    10 => (LOG_OAK, LEAVES_APPLE),
-                    _ => (LOG_OAK, LEAVES_ORANGE),
+                    7 => (LOG_OAK, if tv == 0 { LEAVES_MAPLE } else { LEAVES_OAK }),
+                    10 => (LOG_OAK, if tv < 2 { LEAVES_APPLE } else { LEAVES_OAK }),
+                    _ => (LOG_OAK, if tv == 0 { LEAVES_ORANGE } else { LEAVES_OAK }),
                 };
                 // (trunk height, crown rx, crown ry, lobes)
                 let (th, rx, ry, nl) = match kind {

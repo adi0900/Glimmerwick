@@ -371,6 +371,8 @@ function deriveCams(ctx: Ctx): Record<string, GalleryCam> {
   }
   cams.sunset = { pos: [cx + 40, 2.3, info.origin_z + info.nz - 7], target: [cx - 110, 3.5, cz + 40], fov: 54 };
   cams.night = { pos: [village[0] + 14, gy(village[0] + 14, village[1] + 18) + 3.2, village[1] + 18], target: [village[0], gy(village[0], village[1]) + 1.5, village[1]], fov: 50 };
+  (globalThis as any).__gwCams = cams;
+  (globalThis as any).__gwVillage = [village[0], village[1]];
   cams.seabed = { pos: [cx + 0.55 * 176, 7, cz + 0.62 * 176], target: [cx + 0.4 * 176, -2.5, cz + 0.38 * 176], fov: 52 };
   cams.village = { pos: [village[0] + 26, gy(village[0] + 26, village[1] + 30) + 12, village[1] + 30], target: [village[0], gy(village[0], village[1]) + 1.5, village[1]], fov: 50 };
   const fh = info.habitats?.forest_floor?.[0] as number[] | undefined;

@@ -608,7 +608,7 @@ export class Post {
   /** tweakables (applied on build and live through `apply()`) */
   params = {
     toneMapping: 'neutral' as ToneMapName,
-    bloomIntensity: 0.62,
+    bloomIntensity: 0.8,
     bloomThreshold: 0.92,
     bloomSmoothing: 0.35,
     bloomRadius: 0.8,

@@ -30,11 +30,14 @@ flat varying float vVoxTF;
 const VERT_MAIN = /* glsl */ `
 #if defined( GW_WIND ) && defined( GW_SWAY_ATTR )
 {
-  // leaf flutter: short travelling waves (smooth in world space, so faces never tear) on top of the engine's gust field
-  float gwFp = dot( gwWp0.xz, vec2( 0.83, 1.17 ) ) + gwWp0.y * 0.9 + uWindTime * 2.3;
-  float gwFq = dot( gwWp0.xz, vec2( -1.1, 0.7 ) ) - uWindTime * 1.6;
-  transformed.xz += aSway * vec2( sin( gwFp ) * 0.075 + sin( gwFq * 0.5 ) * 0.05, cos( gwFp * 0.8 + 1.3 ) * 0.075 );
-  transformed.y += aSway * sin( gwFp * 1.3 + gwFq ) * 0.035;
+  // leaf flutter (round 6): 0.8 Hz travelling waves + a lean along the wind that a slow gust wave (~7 s period) rolls through the
+  // canopy. Peak per-vertex offset about 0.06-0.15 m from this block, on top of the engine's own gust displacement.
+  float gwGust = 0.5 + 0.5 * sin( uWindTime * 0.85 + dot( gwWp0.xz, vec2( 0.06, 0.045 ) ) );
+  float gwA = 0.065 + 0.06 * gwGust;
+  float gwFp = dot( gwWp0.xz, vec2( 0.83, 1.17 ) ) + gwWp0.y * 0.9 + uWindTime * 5.0;
+  float gwFq = dot( gwWp0.xz, vec2( -1.1, 0.7 ) ) - uWindTime * 3.4;
+  transformed.xz += aSway * ( vec2( sin( gwFp ) * gwA + sin( gwFq * 0.5 ) * gwA * 0.6, cos( gwFp * 0.8 + 1.3 ) * gwA * 0.8 ) + uWind * ( 0.05 + 0.11 * gwGust ) );
+  transformed.y += aSway * sin( gwFp * 1.3 + gwFq ) * gwA * 0.5;
 }
 #endif
 #include <project_vertex>
@@ -189,7 +192,7 @@ if ( vVoxLight.z > 0.75 ) {
 } else if ( vVoxLight.z > 0.25 ) {
   // lit windows: warm light behind the dark pane, night only
   float gwPane = 1.0 - smoothstep( 0.16, 0.24, dot( gwT.rgb, vec3( 0.299, 0.587, 0.114 ) ) );
-  totalEmissiveRadiance += vec3( 1.0, 0.7, 0.32 ) * ( gwPane * uNight * 1.7 );
+  totalEmissiveRadiance += vec3( 1.0, 0.7, 0.32 ) * ( gwPane * uNight * 3.2 );
 }
 `;
 
@@ -374,6 +377,13 @@ void main() {
   float fn = 0.5 + 0.25 * sin( p.x * 2.1 + uTime * 0.7 ) + 0.25 * sin( p.y * 2.7 - uTime * 0.9 + p.x * 0.6 );
   float surf = vW.y * ( 1.0 + 0.16 * sin( uTime * 1.3 + p.x * 0.35 + p.y * 0.27 ) );
   float foam = smoothstep( 0.30, 0.60, clamp( surf * ( 0.45 + 0.85 * fn ), 0.0, 1.0 ) + vW.y * 0.22 );
+  // swash foam (round 6): a 0.5 m band at the shore line that advances / retreats every ~2.5 s, plus a thin trailing line
+  float swash = 0.5 + 0.5 * sin( uTime * 2.51 + p.x * 0.31 + p.y * 0.23 );
+  float fline = 0.22 + 0.62 * swash;
+  float fnb = 0.5 + 0.5 * sin( p.x * 5.3 + p.y * 3.1 + uTime * 0.9 ) * sin( p.y * 4.7 - p.x * 2.3 - uTime * 0.7 );
+  float foam2 = ( 1.0 - smoothstep( fline - 0.3, fline, d ) ) * smoothstep( -0.05, 0.12, d + 0.1 ) * ( 0.55 + 0.6 * fnb );
+  foam2 += smoothstep( 0.09, 0.0, abs( d - fline - 0.38 ) ) * 0.5 * fnb * swash;
+  foam = clamp( max( foam, foam2 ), 0.0, 1.0 );
   col = mix( col, vec3( 0.95, 1.0, 0.98 ) * mix( 1.0, 0.6, uNight ), foam * 0.85 );
   float alpha = mix( 0.30, 0.97, smoothstep( 0.0, 4.5, d ) );
   alpha = max( alpha, fres );

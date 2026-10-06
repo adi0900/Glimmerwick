@@ -11,3 +11,5 @@ reference/*
 web/.dev-pid
 Thumbs.db
 .DS_Store
+
+showcase/
