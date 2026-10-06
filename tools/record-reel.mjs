@@ -75,8 +75,8 @@ async function capture() {
       cp = cp ?? p;
       cp = [lerp(cp[0], p[0], 0.18), lerp(cp[1], p[1], 0.18), lerp(cp[2], p[2], 0.18)];
       const u = f / (runN - 1), a = lerp(-1.3, 1.1, ease(u));     // camera swings from the side to behind and low in front
-      const d = lerp(7.5, 5.2, Math.sin(u * Math.PI));
-      await cam({ pos: [cp[0] + Math.sin(a) * d, cp[1] + lerp(1.6, 2.6, Math.sin(u * Math.PI)), cp[2] - Math.cos(a) * d], target: [cp[0], cp[1] + 1.0, cp[2] + 1.8], fov: lerp(78, 66, ease(u)) });
+      const d = lerp(4.6, 3.3, Math.sin(u * Math.PI));              // closer: the avatar must be big in the portrait frame
+      await cam({ pos: [cp[0] + Math.sin(a) * d, cp[1] + lerp(1.3, 1.9, Math.sin(u * Math.PI)), cp[2] - Math.cos(a) * d], target: [cp[0], cp[1] + 0.9, cp[2] + 1.4], fov: lerp(64, 58, ease(u)) });
       await snap();
     }
     await page.keyboard.up('KeyW'); await page.keyboard.up('ShiftLeft');

@@ -203,18 +203,18 @@ function hopShape(u: number, H: number): typeof _hop {
   const f = u - Math.floor(u);
   let lift = 0;
   let sq = 1;
-  if (f < 0.2) sq = 1 - 0.2 * sstep(0, 1, f / 0.2);
-  else if (f < 0.3) sq = 0.8 + 0.4 * ((f - 0.2) / 0.1);
+  if (f < 0.2) sq = 1 - 0.26 * sstep(0, 1, f / 0.2);
+  else if (f < 0.3) sq = 0.74 + 0.58 * ((f - 0.2) / 0.1);
   else if (f < 0.8) {
     const x = (f - 0.3) / 0.5;
     lift = H * 4 * x * (1 - x);
-    sq = 1.2 - 0.14 * x;
-  } else if (f < 0.9) sq = 1.06 - 0.28 * ((f - 0.8) / 0.1);
-  else sq = 0.78 + 0.22 * sstep(0, 1, (f - 0.9) / 0.1);
+    sq = 1.32 - 0.26 * x;
+  } else if (f < 0.9) sq = 1.06 - 0.38 * ((f - 0.8) / 0.1);
+  else sq = 0.68 + 0.32 * sstep(0, 1, (f - 0.9) / 0.1);
   _hop.lift = lift;
   _hop.sq = sq;
   _hop.air = H > 1e-5 ? lift / H : 0;
-  _hop.crouch = clamp((1 - sq) / 0.22, 0, 1);
+  _hop.crouch = clamp((1 - sq) / 0.3, 0, 1);
   return _hop;
 }
 
@@ -308,18 +308,19 @@ const animTidler: Animator = (M, pose, A, R, o) => {
   sqT = mix(sqT, 0.84 + 0.014 * sin(t * 1.3), A.wSleep);
   sqT = mix(sqT, 1.06 + 0.01 * sin(t * 9), A.wNotice);
   o.sq = bodyChannels(pose, body, head, A, R, sqT);
-  o.lift = abs(cos(A.gph)) * 0.012 * walkW + h.lift + (0.01 * sin(t * 2.2) - 0.03) * swim;
+  o.lift = abs(cos(A.gph)) * 0.03 * walkW + h.lift + (0.01 * sin(t * 2.2) - 0.03) * swim;
+  o.sq += 0.05 * cos(A.gph * 2) * walkW;
   o.glow = glowFor(A, R);
-  pose[body * PS + RZ] += sw * 0.07 * walkW + sin(R.swPh * 0.5) * 0.05 * swim;
+  pose[body * PS + RZ] += sw * 0.11 * walkW + sin(R.swPh * 0.5) * 0.05 * swim;
   pose[head * PS + RX] += (A.wSleep * 0.35 - 0.15 * A.wNotice) - 0.15 * swim;
   pose[head * PS + RY] += -sw * 0.1 * walkW + sin(R.swPh - 0.7) * 0.1 * swim + 0.05 * sin(t * 0.6) * (1 - A.moveW);
   pose[head * PS + RZ] = mix(0.04 * sin(t * 0.8), 0.12, A.wSleep);
   // tail: integrated phase; the tip lags through a spring and counter-swings against turns
   // 3 segments, each lagging the one before (phase 0.9 rad ~ 0.25 s at walk), +-12 deg at rest, more when walking / hopping
-  const tA = mix(0.16, 0.26, walkW) + 0.08 * swim + 0.12 * A.hopW;
+  const tA = mix(0.2, 0.3, walkW) + 0.08 * swim + 0.12 * A.hopW;
   pose[t1 * PS + RY] = sin(R.tailPh) * tA * 0.7 - A.yr * 0.04;
-  pose[t2 * PS + RY] = R.sp[4]!.step(sin(R.tailPh - 0.9) * tA - A.yr * 0.07, 110, 8, dt);
-  pose[t3 * PS + RY] = R.sp[5]!.step(sin(R.tailPh - 1.8) * tA * 1.25 - A.yr * 0.1, 90, 6, dt);
+  pose[t2 * PS + RY] = R.sp[4]!.step(sin(R.tailPh - 1.2) * tA - A.yr * 0.07, 110, 8, dt);
+  pose[t3 * PS + RY] = R.sp[5]!.step(sin(R.tailPh - 2.4) * tA * 1.2 - A.yr * 0.1, 90, 6, dt);
   pose[t3 * PS + RX] = R.sp[6]!.step(0.04 * sin(t * 1.3) + 0.12 * A.moveW + 0.3 * h.air * A.hopW - 0.05 * A.acc, 80, 6, dt);
   pose[t2 * PS + RX] = 0.03 * sin(t * 1.3 + 0.5) + 0.1 * h.air * A.hopW;
   // gills: flutter + springs; flare when noticing, droop when asleep
@@ -369,10 +370,11 @@ const animSprigfox: Animator = (M, pose, A, R, o) => {
   let sqT = mix(1 + 0.02 * sin(t * 2.1), h.sq, A.hopW);
   sqT = mix(sqT, 0.76 + 0.015 * sin(t * 1.3), slp);
   o.sq = bodyChannels(pose, body, head, A, R, sqT);
-  o.lift = abs(cos(A.gph)) * mix(0.012, 0.03, A.runW) * walkW + h.lift;
+  o.lift = abs(cos(A.gph)) * mix(0.028, 0.055, A.runW) * walkW + h.lift;
+  o.sq += 0.04 * cos(A.gph * 2) * walkW;
   o.glow = glowFor(A, R);
   pose[body * PS + RX] += (mix(0.025, 0.08, A.runW) * sin(A.gph * 2) + 0.05 * A.runW) * walkW - 0.1 * air;
-  pose[body * PS + RZ] += sw * 0.03 * walkW;
+  pose[body * PS + RZ] += sw * 0.07 * walkW;
   pose[head * PS + RX] += -0.05 * walkW + 0.05 * sin(A.gph * 2 + 1) * walkW + (slp * 0.42 - notice * 0.16) + 0.02 * sin(t * 0.9) * (1 - A.moveW);
   pose[head * PS + RY] += (A.state === 0 && R.aware < 0.1 ? 0.28 * sin(t * 0.45) : 0) * (1 - A.moveW) * (1 - slp);
   pose[head * PS + RZ] = mix(0.04 * sin(t * 0.8), 0.15, slp);
@@ -648,10 +650,10 @@ export class CreatureRenderer {
     const vr = Math.max(0, Math.min(2, r.variant | 0));
     inst.setAttr(slot, vr, O.glow);
     // --- life FX: landing + run-step dust (near the camera only), coloured ground spill under glow markings at night
-    if (dt > 0 && d2 < 28 * 28 && r.state !== 4) {
+    if (dt > 0 && d2 < 42 * 42 && r.state !== 4) {
       const f = R.hop - Math.floor(R.hop);
-      const sz = 0.085 * r.scale;
-      if (R.hopW > 0.5 && R.pf < 0.8 && f >= 0.8) this.fx.puff(r.x, r.y, r.z, 6 + (R.runW > 0.5 ? 2 : 0), sz, 0.9);
+      const sz = 0.14 * r.scale;
+      if (R.hopW > 0.5 && R.pf < 0.8 && f >= 0.8) this.fx.puff(r.x, r.y, r.z, 10 + (R.runW > 0.5 ? 3 : 0), sz, 1.2);
       R.pf = f;
       const g = Math.floor(R.gph / Math.PI);
       if (g !== R.pg) {

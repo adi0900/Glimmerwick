@@ -47,6 +47,7 @@ const VERT_MAIN = /* glsl */ `
 `;
 
 const FRAG_PARS = /* glsl */ `
+#include <gw_voxelcell>
 uniform vec3 uCrPal[${SLOTS * VARIANTS}];
 uniform vec4 uCrFx; // x bevel width . y bevel strength . z edge darkening . w emissive gain
 uniform float uCrNight;
@@ -69,12 +70,9 @@ diffuseColor.rgb = mix( crAlb, vec3( crLum ) * vec3( 0.95, 1.0, 1.15 ), 0.5 * uC
 const FRAG_BEVEL = /* glsl */ `
 #include <normal_fragment_maps>
 {
-  vec2 crE = min( vCrUv, 1.0 - vCrUv );
   float crFw = max( fwidth( vCrUv.x ), fwidth( vCrUv.y ) );
-  float crFade = 1.0 - smoothstep( 0.2, 0.55, crFw );
-  float crBt = ( 1.0 - smoothstep( 0.0, uCrFx.x, min( crE.x, crE.y ) ) ) * crFade;
-  vec2 crD = vCrUv - 0.5;
-  vec3 crOut = abs( crD.x ) > abs( crD.y ) ? vCrT * sign( crD.x ) : vCrB * sign( crD.y );
+  float crBt = gwCellEdge( vCrUv, uCrFx.x ) * gwCellFade( crFw );
+  vec3 crOut = gwCellOut( vCrUv, vCrT, vCrB );
   normal = normalize( normal + crOut * ( crBt * uCrFx.y ) );
   diffuseColor.rgb *= 1.0 - uCrFx.z * crBt;
 }
@@ -154,7 +152,7 @@ export function makeActorMaterial(ctx: Ctx, palettes: string[][], name: string):
     if (e > 0) fs = fs.slice(0, e) + '  if ( uCrSil > 0.5 ) gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );\n}' + fs.slice(e + 1);
     shader.fragmentShader = fs;
   };
-  material.customProgramCacheKey = () => 'gw-voxactor-2';
+  material.customProgramCacheKey = () => 'gw-voxactor-3';
   void fxVec;
   return { material, pal, fx, setPalette };
 }

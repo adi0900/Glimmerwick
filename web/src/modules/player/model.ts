@@ -130,8 +130,9 @@ export class VoxelAvatar {
       pose[armL * PS + RX] = sw * 0.75 * amp;
       pose[body * PS + RY] = sw * 0.12 * amp;
       pose[head * PS + RY] = -sw * 0.09 * amp;
-      lift = Math.abs(sw) * 0.035 * amp;
-      sq = 1;
+      lift = Math.abs(sw) * 0.07 * amp;
+      sq = 1 + 0.03 * Math.cos(this.ph * 2) * amp;
+      pose[body * PS + RZ] = sw * 0.06 * amp;
     } else if (swimming) {
       const k = this.swimK;
       pose[legR * PS + RX] = Math.sin(this.ph * 1.6) * 0.5 * k;
@@ -162,7 +163,7 @@ export class VoxelAvatar {
       }
     } else if (state === 5) {
       const k = clamp(1 - animT / 0.25, 0, 1);
-      sq = 1 - 0.12 * k;
+      sq = 1 - 0.22 * k;
       pose[armR * PS + RZ] = 0.4 * k;
       pose[armL * PS + RZ] = -0.4 * k;
     } else {
@@ -190,14 +191,14 @@ export class VoxelAvatar {
       const fx = fxFor(this.ctx);
       if (!grounded) this.vyAir = Math.min(this.vyAir, vy);
       else {
-        if (!this.wasG && !swimming && this.vyAir < -1.5) fx.puff(x, y, z, 7, 0.075, 1.1);
+        if (!this.wasG && !swimming && this.vyAir < -1.5) fx.puff(x, y, z, 10, 0.11, 1.3);
         this.vyAir = 0;
       }
       this.wasG = grounded;
       const g = Math.floor(this.ph / Math.PI);
       if (g !== this.pg) {
         this.pg = g;
-        if (grounded && !swimming && speed > 4.6) fx.puff(x - Math.sin(yaw) * 0.2, y, z - Math.cos(yaw) * 0.2, 2, 0.06, 0.5);
+        if (grounded && !swimming && speed > 4.0) fx.puff(x - Math.sin(yaw) * 0.2, y, z - Math.cos(yaw) * 0.2, 3, 0.09, 0.7);
       }
     }
     // root: feet position, yaw, volume-preserving squash
