@@ -39,6 +39,8 @@ export interface PaintCtx {
 }
 export type PaintSpec = number | Paint | ((c: PaintCtx) => number | Paint | null | undefined);
 export interface Vox {
+  /** decal-moved cell (eyes): attached to the surface behind it, so prune() keeps it */
+  d?: boolean;
   part: number;
   s: number;
   h: number;
@@ -372,7 +374,7 @@ export class Sculpt {
         }
         if (hit < 0) continue;
         const p = resolve(spec, { x: hx + 0.5, y: hy + 0.5, z: hz + 0.5, nx: 0, ny: 0, nz: 1, r: 1, t: 0, lx: 0, ly: 0, lz: 0 });
-        if (p) this.vox.set(hit, { part: into, s: p.s, h: p.h ?? 1, e: p.e ?? 0 });
+        if (p) this.vox.set(hit, { part: into, s: p.s, h: p.h ?? 1, e: p.e ?? 0, d: o.into !== undefined });
       }
     }
   }
@@ -429,12 +431,16 @@ export class Sculpt {
       const z = (k % SPAN) - OFF;
       const y = (Math.floor(k / SPAN) % SPAN) - OFF;
       const x = Math.floor(k / (SPAN * SPAN)) - OFF;
-      let n = 0;
+      let n = 0,
+        m = 0;
       for (const d of DIRS) {
         const w = this.vox.get(K(x + d[0], y + d[1], z + d[2]));
-        if (w && w.part === v.part) n++;
+        if (w) {
+          m++;
+          if (w.part === v.part) n++;
+        }
       }
-      if (n === 0) this.vox.delete(k);
+      if (n === 0 && !(v.d && m > 0)) this.vox.delete(k);
     }
   }
 }

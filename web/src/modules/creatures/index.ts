@@ -64,6 +64,11 @@ function layout(set: string): LabActor[] {
     out.push(actor({ id: id++, avatar: true, x: 0, z: -2.0, yaw: 0.1 }));
     for (let s = 0; s < 3; s++)
       [0.65, 1.0, 1.45].forEach((k, i) => out.push(actor({ id: id++, species: s, variant: i, x: (s - 1) * 3.6 + [-0.8, 0.1, 1.15][i]!, z: 0.6, yaw: 0.25, scale: bs[s]! * k })));
+  } else if (set === 'faces') {
+    // face sheet: avatar + the three species side by side, nearly frontal, species enlarged so every head is ~0.5 m wide
+    out.push(actor({ id: id++, avatar: true, x: -1.5, yaw: 0.1 }));
+    const fsc = [1.25, 1.2, 1.6];
+    for (let s = 0; s < 3; s++) out.push(actor({ id: id++, species: s, x: -0.5 + s, yaw: 0.1, scale: bs[s]! * fsc[s]! }));
   } else if (set === 'group') {
     const rnd = lcg(7);
     out.push(actor({ id: id++, avatar: true, x: 0, z: -0.4, yaw: 0 }));
@@ -148,13 +153,15 @@ class Lab {
     const sd = sunDirFromHours(Number.isFinite(hours) ? hours : 16.5, new Vector3());
     const sgn = sd.y < 0.05 ? -1 : 1;
     this.yaw = ctx.view.params.ly !== undefined ? Number(ctx.view.params.ly) : Math.atan2(sd.x * sgn, sd.z * sgn) + 0.7;
-    this.turn = Number(ctx.view.params.turn ?? 0);
+    this.turn = Number(ctx.view.params.spin ?? ctx.view.params.turn ?? 0);
     for (const a of this.actors) if (a.avatar) {
       const av = new VoxelAvatar(ctx, 'lab');
       root.add(av.group);
       this.avatars.push(av);
     }
     this.buildCams();
+    // the face sheet: everybody looks into the camera
+    if (set === 'faces') this.player.set(...this.L(0, 0.55, 6.0));
   }
 
   /** local stage coords (x right, y up, z toward the camera) -> world */
@@ -169,12 +176,14 @@ class Lab {
     const L = (x: number, y: number, z: number): [number, number, number] => this.L(x, y, z);
     const sheet = this.set === 'sheet';
     c.sheet = { pos: L(0.1, 0.95, 6.0), target: L(-0.1, 0.5, 0), fov: 30 };
-    c.far = { pos: L(0.1, 1.2, 15.5), target: L(-0.1, 0.4, 0), fov: 30 };
+    c.far = { pos: L(0.1, 3.2, 13.0), target: L(-0.1, 0.45, 0), fov: 24 };
     c.variants = { pos: L(0, 4.4, 6.8), target: L(0, 0.2, -1.6), fov: 38 };
     c.turn = { pos: L(0, 3.6, 7.6), target: L(0, 0.35, -2.2), fov: 40 };
-    c.sizes = { pos: L(0, 1.6, 9.0), target: L(0, 0.55, -0.4), fov: 36 };
+    c.sizes = { pos: L(0.3, 1.6, 10.0), target: L(0.3, 0.55, -0.4), fov: 42 };
     c.group = { pos: L(0.6, 1.7, 8.4), target: L(0, 0.35, -0.6), fov: 42 };
     c.groupLow = { pos: L(-2.4, 0.7, 6.6), target: L(0.2, 0.55, -0.6), fov: 46 };
+    c.faces = { pos: L(0, 0.62, 6.0), target: L(0, 0.55, 0), fov: 26 };
+    c.states = { pos: L(0, 1.9, 5.6), target: L(0, 0.3, -1.4), fov: 34 };
     const near = (i: number, dist: number, h: number, az: number, fov: number, ty: number): GalleryCam => {
       const a = this.actors[i];
       if (!a) return c.sheet!;
@@ -194,6 +203,10 @@ class Lab {
       c.sprigfox = near(3, 2.1, 0.55, 0.5, 28, 0.42);
       c.macro = near(1, 0.95, 0.5, 0.3, 24, 0.5);
       c.trio = { pos: L(0.7, 0.8, 4.2), target: L(0.6, 0.38, 0), fov: 32 };
+      c.faceAvatar = near(0, 2.0, 0.9, 0.15, 22, 0.88);
+      c.facePuffbun = near(1, 1.55, 0.45, 0.15, 22, 0.45);
+      c.faceTidler = near(2, 1.45, 0.3, 0.15, 22, 0.27);
+      c.faceSprigfox = near(3, 1.3, 0.38, 0.15, 22, 0.36);
       c.back = { pos: L(0.2, 1.2, -5.6), target: L(0, 0.5, 0), fov: 30 };
     }
   }
@@ -209,7 +222,7 @@ class Lab {
         const av = this.avatars[ai++]!;
         const walk = a.state === 1;
         av.draw(wx, wy, wz, yaw, walk ? Math.sin(yaw) * 3.5 : 0, 0, walk ? Math.cos(yaw) * 3.5 : 0, walk ? 1 : 0, t, true, 0, dt);
-        if (ai === 1) this.player.set(wx, wy, wz);
+        if (ai === 1 && this.set !== 'faces') this.player.set(wx, wy, wz);
         continue;
       }
       row.id = a.id;

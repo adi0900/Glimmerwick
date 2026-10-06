@@ -8,11 +8,16 @@
   {"id": "07_variants_grid", "cam": "variants", "time": 16.5, "size": "1280x720", "param": "set=variants"},
   {"id": "08_turnaround", "cam": "turn", "time": 16.5, "size": "1280x720", "param": "set=turn"},
   {"id": "09_size_lineup", "cam": "sizes", "time": 16.5, "size": "1280x720", "param": "set=sizes"},
-  {"id": "10_states_idle_notice_sleep_happy", "cam": "variants", "time": 16.5, "size": "1280x720", "param": "set=states"},
+  {"id": "10_states_idle_notice_sleep_happy", "cam": "states", "time": 16.5, "size": "1280x720", "param": "set=states"},
   {"id": "11_group_meadow_golden", "cam": "group", "time": 16.5, "size": "1280x720", "param": "set=group"},
   {"id": "12_group_low_angle", "cam": "groupLow", "time": 17.5, "size": "1280x720", "param": "set=group"},
   {"id": "13_night_glow", "cam": "groupLow", "time": 23, "size": "1280x720", "param": "set=group"},
-  {"id": "14_readability_64px", "cam": "far", "time": 16.5, "size": "1280x720", "param": "set=sheet", "crop": "490,260,300,200", "zoom": 3},
+  {"id": "14_readability_64px", "cam": "far", "time": 16.5, "size": "1280x720", "param": "set=sheet", "crop": "300,245,680,195", "zoom": 2},
   {"id": "15_macro_eye", "cam": "macro", "time": 16.5, "size": "1280x720", "param": "set=sheet"},
-  {"id": "16_turntable_filmstrip", "cam": "trio", "time": 16.5, "size": "960x540", "param": "set=sheet&turn=3.2", "filmstrip": {"frames": 8, "interval": 120}}
+  {"id": "16_turntable_filmstrip", "cam": "trio", "time": 16.5, "size": "960x540", "param": "set=sheet&spin=3.2", "filmstrip": {"frames": 8, "interval": 120}},
+  {"id": "17_faces_sheet", "cam": "faces", "time": 14.5, "size": "1280x720", "param": "set=faces"},
+  {"id": "18_face_puffbun", "cam": "facePuffbun", "time": 14.5, "size": "1280x720", "param": "set=sheet"},
+  {"id": "19_face_tidler", "cam": "faceTidler", "time": 14.5, "size": "1280x720", "param": "set=sheet"},
+  {"id": "20_face_sprigfox", "cam": "faceSprigfox", "time": 14.5, "size": "1280x720", "param": "set=sheet"},
+  {"id": "21_face_avatar", "cam": "faceAvatar", "time": 14.5, "size": "1280x720", "param": "set=sheet"}
 ]
