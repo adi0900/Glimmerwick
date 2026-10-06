@@ -19,8 +19,11 @@ const sstep = (a: number, b: number, x: number): number => {
 };
 const wrap = (i: number, n: number): number => ((i % n) + n) % n;
 
+/** variant seed offset: every variant layer is a different painting */
+let VS = 0;
+
 function rnd(x: number, y: number, s: number): number {
-  let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(s | 0, 1274126177)) | 0;
+  let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul((s | 0) + VS * 7919, 1274126177)) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
   h ^= h >>> 16;
   return (h >>> 0) / 4294967296;
@@ -150,37 +153,77 @@ class Img {
 }
 
 // ------------------------------------------------------------------------------------------------- recipes
+// Painting rules (round 3): crisp posterised texels (no blurred noise), NO tile-scale brightness gradient (the shader's
+// world-space macro noise provides the large-scale drift, so tiles never show a per-block stamp), asymmetric details only
+// (no discs in pairs: they read as faces), every variant is a different painting (seed offset VS) with the same mean tone.
 
 const MEADOW = ['#46A05A', '#66BB58', '#98D464', '#CBE673'].map(hx) as RGB[];
 const FOREST = ['#34804F', '#4A9F58', '#72BA66', '#A6D678'].map(hx) as RGB[];
 const HIGH = ['#86B055', '#B0D066', '#D2DE66', '#EAF08A'].map(hx) as RGB[];
 
-function dirtFill(im: Img, s = 1, base = hx('#9C7C58'), dark = hx('#7A5E3E'), light = hx('#BE9C6C')): void {
-  im.fill((u, v) => {
-    const n = fbm(u, v, 4, 3, s);
-    const c = mixc(mixc(dark, base, sstep(0.25, 0.6, n)), light, sstep(0.6, 0.85, fbm(u, v, 9, 2, s + 4)) * 0.7);
-    return scale(c, 0.96 + 0.08 * rnd(u * S, v * S, s));
+/** posterised ramp lookup, t in [0, 1] */
+const tone = (pal: RGB[], t: number): RGB => pal[Math.min(pal.length - 1, Math.max(0, Math.floor(t * pal.length)))]!;
+
+function dirtFill(im: Img, s = 1, base = hx('#A5845A'), dark = hx('#876A4A'), light = hx('#BF9C6E'), roots = true): void {
+  const hi = mixc(light, hx('#FFF2D8'), 0.25);
+  const ramp = [dark, mixc(dark, base, 0.55), base, mixc(base, light, 0.5), light];
+  im.fill((u, v, x, y) => {
+    const n = fbm(u, v, 6, 3, s) * 0.8 + fbm(u, v, 16, 2, s + 4) * 0.2;
+    let c = tone(ramp, (n - 0.22) / 0.56 + (rnd(x, y, s + 8) - 0.5) * 0.16);
+    if (fbm(u, v, 14, 2, s + 6) > 0.74 && rnd(x, y, s + 3) > 0.35) c = hi;
+    return c;
   });
-  for (let k = 0; k < 16; k++) {
-    const x = rnd(k, 1, s) * S;
-    const y = rnd(k, 2, s) * S;
-    const r = 1.4 + rnd(k, 3, s) * 2.2;
-    im.disc(x + 0.8, y + 0.8, r, scale(dark, 0.8), 0.5);
-    im.disc(x, y, r, mixc(light, hx('#B7A58E'), 0.45), 0.85);
+  const stones = ['#B9A88F', '#9E9183', '#CDBB9E', '#8C7D6E'].map(hx);
+  for (let k = 0; k < 8; k++) {
+    const cx = rnd(k, 1, s) * S;
+    const cy = rnd(k, 2, s) * S;
+    const rx = 1.3 + rnd(k, 3, s) * 1.9;
+    const ry = 1.0 + rnd(k, 4, s) * 1.3;
+    const a = rnd(k, 5, s) * Math.PI;
+    const sc = stones[Math.floor(rnd(k, 6, s) * stones.length)]!;
+    const ca = Math.cos(a);
+    const sa = Math.sin(a);
+    const R = Math.ceil(Math.max(rx, ry)) + 1;
+    for (let j = -R; j <= R; j++) {
+      for (let i = -R; i <= R; i++) {
+        const qx = (i * ca + j * sa) / rx;
+        const qy = (-i * sa + j * ca) / ry;
+        const d = qx * qx + qy * qy;
+        const lit = (-i - j) / (R * 2);
+        if (d <= 1) im.px(cx + i, cy + j, d > 0.6 || lit < -0.12 ? scale(sc, 0.76) : lit > 0.1 ? scale(sc, 1.14) : sc);
+        else if (d <= 2 && i + j > 0) im.px(cx + i, cy + j, scale(dark, 0.7), 0.45);
+      }
+    }
   }
+  for (let k = 0; k < (roots ? 3 : 0); k++) {
+    let x = rnd(k, 21, s) * S;
+    let y = rnd(k, 22, s) * S;
+    let a = rnd(k, 23, s) * 6.283;
+    const len = 12 + rnd(k, 24, s) * 16;
+    for (let t = 0; t < len; t++) {
+      a += (rnd(k, 30 + t, s) - 0.5) * 0.7;
+      x += Math.cos(a);
+      y += Math.sin(a);
+      im.px(x, y, hx('#5A4128'), 0.85);
+      im.px(x - 1, y - 1, light, 0.25);
+    }
+  }
+  for (let k = 0; k < 26; k++) im.px(rnd(k, 41, s) * S, rnd(k, 42, s) * S, hi, 0.8);
+  for (let k = 0; k < 18; k++) im.px(rnd(k, 43, s) * S, rnd(k, 44, s) * S, scale(dark, 0.75), 0.8);
 }
 
 function grassTop(im: Img, pal: RGB[], s: number): void {
-  im.fill((u, v) => {
-    const n = fbm(u, v, 4, 3, s);
-    const c = mixc(pal[0]!, pal[1]!, sstep(0.2, 0.7, n));
-    return mixc(c, pal[2]!, sstep(0.55, 0.9, fbm(u, v, 10, 2, s + 9)) * 0.75);
-  });
-  for (let k = 0; k < 110; k++) {
-    const x = rnd(k, 5, s) * S;
-    const y = rnd(k, 6, s) * S;
-    const light = k % 3 === 0;
-    im.stroke(x, y, -Math.PI / 2 + (rnd(k, 7, s) - 0.5) * 1.6, 3 + rnd(k, 8, s) * 4, light ? pal[3]! : scale(pal[0]!, 0.85), light ? 0.55 : 0.5);
+  const ramp = [mixc(pal[0]!, pal[1]!, 0.4), mixc(pal[0]!, pal[1]!, 0.75), pal[1]!, mixc(pal[1]!, pal[2]!, 0.3)];
+  im.fill((u, v, x, y) => tone(ramp, (fbm(u, v, 8, 3, s) - 0.22) / 0.56 + (rnd(x, y, s + 2) - 0.5) * 0.55));
+  const dry = hx('#D6E063');
+  for (let k = 0; k < 80; k++) {
+    const x = Math.floor(rnd(k, 5, s) * S);
+    const y = Math.floor(rnd(k, 6, s) * S);
+    const d = k > 72;
+    im.px(x, y, d ? mixc(pal[1]!, dry, 0.5) : mixc(pal[0]!, pal[1]!, 0.3));
+    im.px(x, y - 1, d ? dry : pal[1]!);
+    if (rnd(k, 7, s) > 0.35) im.px(x, y - 2, d ? dry : pal[2]!);
+    if (rnd(k, 8, s) > 0.6) im.px(x + (rnd(k, 9, s) > 0.5 ? 1 : -1), y - 1, pal[2]!);
   }
 }
 
@@ -216,18 +259,23 @@ function stone(im: Img, dark: RGB, mid: RGB, light: RGB, s: number): void {
   for (let k = 0; k < 22; k++) im.disc(rnd(k, 21, s) * S, rnd(k, 22, s) * S, 0.9 + rnd(k, 23, s), scale(light, 1.08), 0.6);
 }
 
-function leaves(im: Img, pal: RGB[], s: number, dots?: { c: RGB; n: number; r: number }, streak = false): void {
-  im.fill((u, v) => scale(pal[0]!, 0.85 + 0.2 * fbm(u, v, 6, 2, s)));
-  for (let k = 0; k < 96; k++) {
-    const cx = rnd(k, 31, s) * S;
-    const cy = rnd(k, 32, s) * S;
-    const r = 3 + rnd(k, 33, s) * 4.5;
-    const c = rnd(k, 34, s) < 0.45 ? pal[1]! : pal[2]!;
-    im.disc(cx + 0.7, cy + 0.9, r, scale(pal[0]!, 0.75), 0.6);
-    im.disc(cx, cy, r, c, 0.95);
-    im.disc(cx - r * 0.25, cy - r * 0.3, r * 0.55, mixc(c, pal[3] ?? hx('#ffffff'), 0.5), 0.55);
+/** leaf clusters: 3-5 x 2-3 texel clumps, light top row, shaded bottom row, soft contact shadow; crisp at native density */
+function leaves(im: Img, pal: RGB[], s: number, dots?: { c: RGB; n: number; r: number }): void {
+  im.fill((u, v, x, y) => scale(pal[0]!, 0.88 + 0.16 * fbm(u, v, 5, 2, s) + 0.05 * (rnd(x, y, s) - 0.5)));
+  const shade = scale(pal[0]!, 0.68);
+  const hiC = pal[3] ?? hx('#ffffff');
+  const clump = (cx: number, cy: number, w: number, h: number, c: RGB): void => {
+    for (let j = 0; j <= h + 1; j++) for (let i = 0; i <= w + 1; i++) if (!((i === 0 || i >= w) && (j === 0 || j >= h))) im.px(cx + i + 1, cy + j + 1, shade, 0.7);
+    for (let j = 0; j <= h; j++) {
+      for (let i = 0; i <= w; i++) {
+        if ((i === 0 || i === w) && (j === 0 || j === h)) continue;
+        im.px(cx + i, cy + j, j === 0 ? mixc(c, hiC, 0.35) : j === h ? scale(c, 0.86) : c);
+      }
+    }
+  };
+  for (let k = 0; k < 120; k++) {
+    clump(Math.floor(rnd(k, 31, s) * S), Math.floor(rnd(k, 32, s) * S), 3 + Math.floor(rnd(k, 33, s) * 3), 2 + Math.floor(rnd(k, 36, s) * 2), rnd(k, 34, s) < 0.45 ? pal[1]! : pal[2]!);
   }
-  if (streak) for (let k = 0; k < 60; k++) im.stroke(rnd(k, 35, s) * S, rnd(k, 36, s) * S, Math.PI / 2 + (rnd(k, 37, s) - 0.5) * 0.5, 6 + rnd(k, 38, s) * 8, pal[3] ?? pal[2]!, 0.4);
   if (dots) {
     for (let k = 0; k < dots.n; k++) {
       const x = rnd(k, 41, s) * S;
@@ -239,15 +287,88 @@ function leaves(im: Img, pal: RGB[], s: number, dots?: { c: RGB; n: number; r: n
   }
 }
 
-function bark(im: Img, base: RGB, ridge: RGB, crack: RGB, s: number): void {
-  im.fill((u, v) => {
-    const r = vn(u, v, 8, s) * 0.7 + vn(u * 2 % 1, v, 16, s + 3) * 0.3;
-    let c = mixc(base, ridge, sstep(0.35, 0.8, r));
-    if (vn(u, v, 12, s + 5) < 0.2) c = mixc(c, crack, 0.75);
-    return scale(c, 0.95 + 0.1 * rnd(u * S, v * S, s));
-  });
-  for (let k = 0; k < 12; k++) im.stroke(rnd(k, 51, s) * S, rnd(k, 52, s) * S, Math.PI / 2, 8 + rnd(k, 53, s) * 14, scale(ridge, 1.1), 0.5);
+/** pine / palm / willow: sprays of 1 texel needles (drooping fans), dark undercoat, bright tips */
+function needles(im: Img, pal: RGB[], s: number, l0: number, l1: number, spread: number, count = 5): void {
+  im.fill((u, v, x, y) => scale(pal[0]!, 0.78 + 0.16 * fbm(u, v, 5, 2, s) + 0.05 * (rnd(x, y, s) - 0.5)));
+  const shade = scale(pal[0]!, 0.6);
+  for (let k = 0; k < 120; k++) {
+    const cx = rnd(k, 31, s) * S;
+    const cy = rnd(k, 32, s) * S;
+    const ba = Math.PI / 2 + (rnd(k, 39, s) - 0.5) * 0.9;
+    for (let pass = 0; pass < 2; pass++) {
+      for (let q = 0; q < count; q++) {
+        const a = ba + (q - (count - 1) / 2) * spread + (rnd(k * 8 + q, 40, s) - 0.5) * 0.25;
+        const L = l0 + rnd(k * 8 + q, 41, s) * (l1 - l0);
+        const col = q % 2 ? pal[1]! : pal[2]!;
+        for (let t = 0; t <= L; t++) {
+          if (pass === 0) im.px(cx + Math.cos(a) * t + 1, cy + Math.sin(a) * t + 1, shade, 0.7);
+          else im.px(cx + Math.cos(a) * t, cy + Math.sin(a) * t, t > L - 1.2 ? (pal[3] ?? col) : t < 1.5 ? scale(col, 0.75) : col);
+        }
+      }
+    }
+  }
 }
+
+/** vertical ridged bark: broken grooves, lit ridge tops, 1-2 knots; spots <= 12 % darker than the base */
+function bark(im: Img, base: RGB, ridge: RGB, crack: RGB, s: number): void {
+  im.fill((u, v, x, y) => {
+    const q = u * 8 + 0.45 * vn(u, v, 3, s) + 0.3 * vn(u, v, 9, s + 3);
+    const f = q - Math.floor(q);
+    const tri = Math.abs(f - 0.5) * 2; // 0 ridge centre .. 1 groove
+    const broken = vn(u, v * 0.5, 6, s + 2);
+    let c = tri < 0.28 ? scale(ridge, 1.04) : tri < 0.7 ? mixc(base, ridge, 0.35) : tri > 0.88 && broken > 0.3 ? mixc(base, crack, 0.5) : scale(base, 0.94);
+    if (tri > 0.7 && tri <= 0.88) c = mixc(base, crack, 0.18);
+    // ridges are broken into bark plates 8-16 texels tall, each a slightly different value
+    const col = ((Math.floor(q) % 8) + 8) % 8;
+    const seg = (Math.floor(v * 6) + Math.floor(rnd(col, 1, s) * 6)) % 6;
+    return scale(c, (0.9 + 0.17 * rnd(col, seg, s + 9)) * (0.97 + 0.06 * rnd(x, y, s + 8)));
+  });
+  for (let k = 0; k < (rnd(7, 8, s) > 0.4 ? 1 : 0); k++) {
+    const kx = 10 + rnd(k, 61, s) * (S - 20);
+    const ky = 8 + rnd(k, 62, s) * (S - 16);
+    const rx = 3.2 + rnd(k, 63, s) * 1.6;
+    const ry = rx * 1.6;
+    for (let j = -12; j <= 12; j++) {
+      for (let i = -8; i <= 8; i++) {
+        const r = Math.hypot(i / rx, j / ry);
+        if (r > 1.15) continue;
+        const ring = Math.floor(r * 3.2);
+        im.px(kx + i, ky + j, r < 0.3 ? scale(crack, 0.9) : ring % 2 === 0 ? mixc(base, crack, 0.4) : scale(ridge, 1.02), 0.9);
+      }
+    }
+  }
+}
+
+function sandPaint(im: Img): void {
+  const P = ['#E6C768', '#F0D47A', '#F8E093', '#FFF0B8'].map(hx);
+  im.fill((u, v, x, y) => tone([P[0]!, P[1]!, P[1]!, P[2]!], (fbm(u, v, 10, 3, 21) - 0.22) / 0.56 + (rnd(x, y, 23) - 0.5) * 0.3));
+  // wind-ripple crescents (isotropic: the shader rotates / flips tops per block)
+  for (let k = 0; k < 22; k++) {
+    const x = rnd(k, 71, 21) * S;
+    const y = rnd(k, 72, 21) * S;
+    const len = 6 + rnd(k, 73, 21) * 10;
+    const bow = (rnd(k, 74, 21) - 0.5) * 3.2;
+    for (let i = 0; i <= len; i++) {
+      const cy = Math.sin((i / len) * Math.PI) * bow;
+      im.px(x + i, y + cy, P[3]!, 0.72);
+      im.px(x + i, y + cy + 1, scale(P[0]!, 0.94), 0.55);
+    }
+  }
+  for (let k = 0; k < 44; k++) im.px(rnd(k, 75, 21) * S, rnd(k, 76, 21) * S, hx('#BF9F52'), 0.85);
+  for (let k = 0; k < 30; k++) im.px(rnd(k, 77, 21) * S, rnd(k, 78, 21) * S, hx('#FFF8DE'), 0.9);
+}
+
+function plasterPaint(im: Img): void {
+  const P = [hx('#F2DFC0'), hx('#F7E6CA'), hx('#FFF1DA')];
+  im.fill((u, v, x, y) => tone(P, (fbm(u, v, 8, 2, 191) - 0.25) / 0.5 + (rnd(x, y, 192) - 0.5) * 0.35));
+  for (let k = 0; k < 16; k++) {
+    const x = rnd(k, 1, 193) * S;
+    const y = rnd(k, 2, 193) * S;
+    const len = 5 + rnd(k, 3, 193) * 9;
+    for (let i = 0; i < len; i++) im.px(x + i, y + Math.sin(i * 0.3) * 0.6, hx('#E4CFAA'), 0.5);
+  }
+}
+
 
 const PAINT: Record<string, (im: Img) => void> = {
   grass_top: (im) => grassTop(im, MEADOW, 1),
@@ -271,14 +392,7 @@ const PAINT: Record<string, (im: Img) => void> = {
   stone_cool: (im) => stone(im, hx('#968BA6'), hx('#AEA4BC'), hx('#C9C0D3'), 11),
   stone_warm: (im) => stone(im, hx('#A98B72'), hx('#C9A98C'), hx('#E2C8AC'), 12),
   stone_dark: (im) => stone(im, hx('#6A5C76'), hx('#82738C'), hx('#9F90A6'), 13),
-  sand: (im) => {
-    im.fill((u, v) => {
-      let c = mixc(hx('#F2D56E'), hx('#FFEFA6'), sstep(0.2, 0.7, fbm(u, v, 5, 3, 21)));
-      c = scale(c, 1 + 0.035 * Math.sin((v + 0.04 * fbm(u, v, 6, 2, 22)) * Math.PI * 2 * 5));
-      return scale(c, 0.97 + 0.06 * rnd(u * S, v * S, 23));
-    });
-    for (let k = 0; k < 14; k++) im.px(rnd(k, 71, 21) * S, rnd(k, 72, 21) * S, hx('#FFF8E2'), 0.9);
-  },
+  sand: sandPaint,
   gravel: (im) => {
     const pal = ['#8C8580', '#A89F96', '#6F6A68', '#B8A98F', '#7A7470'].map(hx);
     im.fill((u, v) => {
@@ -299,11 +413,11 @@ const PAINT: Record<string, (im: Img) => void> = {
     });
   },
   path_top: (im) => {
-    dirtFill(im, 61, hx('#C9A26B'), hx('#B08850'), hx('#DDBB86'));
+    dirtFill(im, 61, hx('#C9A26B'), hx('#B08850'), hx('#DDBB86'), false);
     for (let k = 0; k < 8; k++) im.stroke(rnd(k, 81, 61) * S, rnd(k, 82, 61) * S, (rnd(k, 83, 61) - 0.5) * 0.4, 12 + rnd(k, 84, 61) * 14, hx('#A5804C'), 0.35);
   },
   packed_top: (im) => {
-    dirtFill(im, 71, hx('#C8BB6E'), hx('#AFA356'), hx('#E0D58C'));
+    dirtFill(im, 71, hx('#C8BB6E'), hx('#AFA356'), hx('#E0D58C'), false);
     for (let k = 0; k < 40; k++) im.stroke(rnd(k, 91, 71) * S, rnd(k, 92, 71) * S, -Math.PI / 2 + (rnd(k, 93, 71) - 0.5), 2 + rnd(k, 94, 71) * 3, hx('#7FB85A'), 0.55);
   },
   snow_top: (im) => im.fill((u, v) => scale(mixc(hx('#DDE8F8'), hx('#FFFFFF'), sstep(0.2, 0.8, fbm(u, v, 4, 3, 81))), 1)),
@@ -346,12 +460,12 @@ const PAINT: Record<string, (im: Img) => void> = {
     });
   },
   leaves_oak: (im) => leaves(im, ['#2D7A45', '#4DB85A', '#8FDC6A', '#C8F08A'].map(hx), 131),
-  leaves_pine: (im) => leaves(im, ['#2A6244', '#3C8A56', '#68B873', '#A2DE9C'].map(hx), 132, undefined, true),
+  leaves_pine: (im) => needles(im, ['#2A6244', '#3C8A56', '#68B873', '#A2DE9C'].map(hx), 132, 4, 7, 0.55),
   leaves_blossom: (im) => leaves(im, ['#E0699A', '#FF8FBE', '#FFC2DA', '#FFF0F6'].map(hx), 133, { c: hx('#FFF7F0'), n: 12, r: 1.7 }),
   leaves_birch: (im) => leaves(im, ['#78A83A', '#A5D14E', '#CDE86A', '#EAF59A'].map(hx), 134),
   leaves_maple: (im) => leaves(im, ['#A8402A', '#CC6A34', '#E6933F', '#F6C677'].map(hx), 135),
-  leaves_palm: (im) => leaves(im, ['#2E8F4C', '#4DB85A', '#86DB78', '#C8F4A0'].map(hx), 136, undefined, true),
-  leaves_willow: (im) => leaves(im, ['#5E9A44', '#86BE5A', '#B0DC7C', '#D8F2A4'].map(hx), 137, undefined, true),
+  leaves_palm: (im) => needles(im, ['#2E8F4C', '#4DB85A', '#86DB78', '#C8F4A0'].map(hx), 136, 6, 11, 0.4),
+  leaves_willow: (im) => needles(im, ['#5E9A44', '#86BE5A', '#B0DC7C', '#D8F2A4'].map(hx), 137, 6, 12, 0.18),
   leaves_berry: (im) => leaves(im, ['#2D7A45', '#4DB85A', '#8FDC6A', '#C8F08A'].map(hx), 138, { c: hx('#E0394A'), n: 9, r: 2 }),
   leaves_apple: (im) => leaves(im, ['#2D7A45', '#4DB85A', '#8FDC6A', '#C8F08A'].map(hx), 139, { c: hx('#E8453C'), n: 7, r: 2.6 }),
   leaves_orange: (im) => leaves(im, ['#2D7A45', '#4DB85A', '#8FDC6A', '#C8F08A'].map(hx), 140, { c: hx('#FF9A2E'), n: 7, r: 2.6 }),
@@ -390,7 +504,7 @@ const PAINT: Record<string, (im: Img) => void> = {
       return c;
     });
   },
-  plaster: (im) => im.fill((u, v) => scale(mixc(hx('#F7E6CA'), hx('#FFF6E6'), sstep(0.2, 0.8, fbm(u, v, 3, 3, 191))), 0.98 + 0.04 * rnd(u * S, v * S, 192))),
+  plaster: plasterPaint,
   roof_tile: (im) => {
     im.fill((u, v, x, y) => {
       const row = Math.floor(y / 16);
@@ -439,7 +553,7 @@ function fallback(name: string): (im: Img) => void {
 
 /** tiles that get hash-picked variants (rolled copies of the painting; the shader also flips / rotates per block) */
 const VARIANTS: Record<string, number> = {
-  grass_top: 4, grass_forest_top: 4, grass_high_top: 4, grass_flower_top: 4, sand: 4, dirt: 3,
+  grass_top: 6, grass_forest_top: 6, grass_high_top: 5, grass_flower_top: 5, sand: 6, dirt: 5, log_oak_side: 3, log_pine_side: 3, leaves_oak: 3, leaves_pine: 3, plaster: 2,
   grass_side: 2, grass_forest_side: 2, grass_high_side: 2, stone_cool: 2, stone_warm: 2, stone_dark: 2, gravel: 2, path_top: 2, packed_top: 2,
 };
 
@@ -467,8 +581,9 @@ export function buildAtlas(names: string[], maxAnisotropy = 8): Atlas {
     variants.set(name, nv);
     for (let v = 0; v < nv; v++) {
       const im = new Img();
+      VS = v;
       (PAINT[name] ?? fallback(name))(im);
-      if (v > 0) im.roll(Math.floor(rnd(v, 1, 777 + name.length) * S), name.includes('side') ? 0 : Math.floor(rnd(v, 2, 779 + name.length) * S), 0.96 + 0.08 * rnd(v, 3, 5));
+      VS = 0;
       data.set(im.rgba(), layer * S * S * 4);
       layer++;
     }
@@ -481,7 +596,8 @@ export function buildAtlas(names: string[], maxAnisotropy = 8): Atlas {
   texture.magFilter = LinearFilter;
   texture.minFilter = LinearMipmapLinearFilter;
   texture.generateMipmaps = true;
-  texture.anisotropy = maxAnisotropy;
+  texture.anisotropy = Math.max(16, maxAnisotropy); // three clamps to the device maximum
+  texture.userData.sandLayer = index.get('sand') ?? -1;
   texture.needsUpdate = true;
   texture.name = 'voxel.tiles';
   return { texture, index, variants, names, layers };

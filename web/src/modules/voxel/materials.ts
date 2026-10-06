@@ -42,6 +42,9 @@ uniform highp sampler2DArray uBlockTiles;
 uniform vec4 uVox; // x bevel width . y bevel strength . z water surface y (m) . w time
 varying float vVoxSway;
 float gwBevelAmt;
+float gwWet;
+float gwShore;
+uniform float uVoxSand;
 varying vec2 vVoxUv;
 varying vec4 vVoxLight;
 flat varying float vVoxTF;
@@ -82,8 +85,16 @@ if ( gwFace == 2 || gwFace == 3 ) {
   gwUv.x = 1.0 - gwUv.x;
 }
 float gwLayer = gwTileF + min( floor( fract( gwJ * 91.7 ) * gwNV ), gwNV - 1.0 );
-vec4 gwT = texture( uBlockTiles, vec3( gwUv, gwLayer ) );
-float gwM = ( gwVoxVN( vGwWorld.xz * 0.045 ) - 0.5 ) * 0.9 + ( gwVoxVN( vGwWorld.xz * 0.16 + 7.3 ) - 0.5 ) * 0.5 + ( gwVoxVN( vGwWorld.xz * 0.55 + 3.1 ) - 0.5 ) * 0.25;
+// sharp-bilinear: texel edges stay crisp up close (1/3 texel soft), plain trilinear + anisotropic when minified;
+// explicit gradients (x0.7 = about -0.5 mip bias) keep the mips / 16x anisotropy of the ORIGINAL uv
+vec2 gwTuv = gwUv * 64.0;
+vec2 gwDx = dFdx( gwUv );
+vec2 gwDy = dFdy( gwUv );
+vec2 gwFw = max( fwidth( gwTuv ), vec2( 0.34 ) );
+vec2 gwSt = floor( gwTuv ) + clamp( ( fract( gwTuv ) - 0.5 ) / gwFw + 0.5, 0.0, 1.0 );
+vec4 gwT = textureGrad( uBlockTiles, vec3( gwSt / 64.0, gwLayer ), gwDx * 0.7, gwDy * 0.7 );
+vec2 gwMp = ( gwFace == 2 || gwFace == 3 ) ? vGwWorld.xz : vec2( vGwWorld.x + vGwWorld.z, vGwWorld.y * 1.4 );
+float gwM = ( gwVoxVN( gwMp * 0.045 ) - 0.5 ) * 0.9 + ( gwVoxVN( gwMp * 0.16 + 7.3 ) - 0.5 ) * 0.5 + ( gwVoxVN( gwMp * 0.55 + 3.1 ) - 0.5 ) * 0.25;
 vec3 gwAlb = gwT.rgb * ( 0.94 + 0.12 * gwJ );
 gwAlb *= 1.0 + gwM * 0.22;
 gwAlb *= vec3( 1.0 + gwM * 0.10, 1.0 + gwM * 0.02, 1.0 - gwM * 0.10 );
@@ -91,8 +102,19 @@ float gwGr = smoothstep( 0.02, 0.25, gwAlb.g - max( gwAlb.r, gwAlb.b ) );
 gwAlb = mix( gwAlb, vec3( gwLuma( gwAlb ) ), 0.14 * gwGr );
 gwAlb.r *= 1.0 + 0.10 * gwGr;
 gwAlb.b *= 1.0 - 0.10 * gwGr;
+// wet sand: darker, browner, glossy within ~1 block of the water surface (soft noisy edge, not a stair line)
+gwWet = 0.0;
+float gwHw = vGwWorld.y - uVox.z;
+if ( abs( gwTileF - uVoxSand ) < 0.5 && gwFace == 2 ) {
+  float gwWn = gwVoxVN( vGwWorld.xz * 0.45 ) - 0.5;
+  gwWet = 1.0 - smoothstep( 0.45, 1.45 + gwWn * 1.1, gwHw );
+  gwAlb *= mix( vec3( 1.0 ), vec3( 0.80, 0.72, 0.60 ), gwWet );
+}
+// the 0.06 m lip of a shore block above the water is wet and un-shaded (it was a dark hairline)
+gwShore = ( gwFace == 2 || gwFace == 3 ) ? 0.0 : ( 1.0 - smoothstep( 0.12, 0.5, gwHw ) ) * step( -0.25, gwHw );
+gwAlb *= mix( vec3( 1.0 ), vec3( 0.86, 0.78, 0.66 ), gwShore );
 float gwAoMin = ( gwFace == 2 || gwFace == 3 ) ? 0.58 : 0.76;
-float gwAOv = mix( gwAoMin, 1.0, vVoxLight.x );
+float gwAOv = mix( mix( gwAoMin, 1.0, vVoxLight.x ), 1.0, gwShore * 0.9 );
 float gwSkyv = mix( 0.64, 1.0, vVoxLight.y );
 diffuseColor.rgb *= gwAlb * gwAOv * gwSkyv;
 float gwDepthM = uVox.z - vGwWorld.y;
@@ -127,7 +149,9 @@ const FRAG_BEVEL = /* glsl */ `
   float gwBt = max( max( b0, b1 ), max( b2, b3 ) );
   vec3 gwNW = normalize( gwVN[ gwFace ] + gwOut * uVox.y );
   normal = normalize( ( viewMatrix * vec4( gwNW, 0.0 ) ).xyz );
-  diffuseColor.rgb *= 1.0 - 0.10 * gwBt;
+  // bevel light: soft highlight on the up / left rims, darker bottom / right rims (like a lit chamfer)
+  float gwEl = dot( gwOut, normalize( vec3( -0.6, 0.75, -0.5 ) ) );
+  diffuseColor.rgb *= 1.0 + ( 0.09 * clamp( gwEl, 0.0, 1.0 ) - 0.13 * clamp( -gwEl, 0.0, 1.0 ) - 0.03 * gwBt ) * ( 1.0 - gwShore );
   gwBevelAmt = gwBt;
 }
 `;
@@ -150,6 +174,8 @@ const FRAG_FLOOR = /* glsl */ `
   float gwDay = 1.0 - uNight;
   float gwSunFace = saturate( dot( gwWN, gwSunN ) );
   outgoingLight += uSunColor * diffuseColor.rgb * ( gwBevelAmt * gwSunFace * 0.35 ) * gwDay;
+  vec3 gwHalf = normalize( gwSunN + normalize( cameraPosition - vGwWorld ) );
+  outgoingLight += uSunColor * pow( saturate( dot( gwWN, gwHalf ) ), 36.0 ) * gwWet * 0.35 * gwDay;
   float gwLeaf = smoothstep( 0.02, 0.30, vVoxSway );
   vec3 gwToCam = normalize( cameraPosition - vGwWorld );
   float gwToSun = pow( saturate( dot( -gwToCam, gwSunN ) ), 2.0 );
@@ -201,12 +227,13 @@ export function makeBlockMaterial(ctx: Ctx, tiles: DataArrayTexture, waterY: num
     wind: { amp: 0.09, speed: 1.0, attr: true },
     name: 'voxel',
   });
-  const vox = new Vector4(0.075, 0.55, waterY, 0);
+  const vox = new Vector4(0.09, 0.75, waterY, 0);
   const base = material.onBeforeCompile;
   material.onBeforeCompile = (shader: any, renderer: any) => {
     base.call(material, shader, renderer);
     shader.uniforms.uBlockTiles = { value: tiles };
     shader.uniforms.uVox = { value: vox };
+    shader.uniforms.uVoxSand = { value: (tiles.userData as any).sandLayer ?? -1 };
     shader.vertexShader = replaceOnce(shader.vertexShader, 'void main() {', VERT_PARS + '\nvoid main() {', 'vertex main');
     shader.vertexShader = replaceOnce(shader.vertexShader, '#include <project_vertex>', VERT_MAIN, 'project_vertex');
     let fs: string = shader.fragmentShader;
@@ -217,7 +244,7 @@ export function makeBlockMaterial(ctx: Ctx, tiles: DataArrayTexture, waterY: num
     fs = replaceOnce(fs, '#include <opaque_fragment>', FRAG_FLOOR, 'opaque_fragment');
     shader.fragmentShader = fs;
   };
-  material.customProgramCacheKey = () => 'gw-voxel-3';
+  material.customProgramCacheKey = () => 'gw-voxel-4';
   return { material, vox };
 }
 

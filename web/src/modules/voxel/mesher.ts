@@ -27,7 +27,7 @@ export const FL = { SOLID: 1, OPAQUE: 2, LIQUID: 4, FOLIAGE: 8, GLOW: 16, PLANT:
 export const REGION = 32;
 const R = REGION;
 const P = R + 2;
-const WATER_DROP = 0.12;
+const WATER_DROP = 0.06;
 
 export interface SolidMesh {
   vcount: number;
