@@ -6,8 +6,9 @@
  */
 import { DataArrayTexture, LinearFilter, LinearMipmapLinearFilter, RepeatWrapping, RGBAFormat, SRGBColorSpace, UnsignedByteType } from 'three';
 
-export const TILE = 64;
-const S = TILE;
+/** atlas tile size (px). Procedural recipes paint at `S` = 64 and are 2x nearest-upscaled; AI tiles are native 128. */
+export const TILE = 128;
+const S = 64;
 type RGB = [number, number, number];
 
 const hx = (h: string): RGB => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
@@ -93,11 +94,21 @@ function worley(u: number, v: number, cells: number, s: number): [number, number
 
 class Img {
   readonly d = new Float32Array(S * S * 3);
+  /** coverage (1 = opaque painting; overlay images start at 0 and are composited over an AI base tile) */
+  readonly m = new Float32Array(S * S);
+  constructor(opaque = true) {
+    if (opaque) this.m.fill(1);
+  }
   px(x: number, y: number, c: RGB, a = 1): void {
-    const i = (wrap(Math.round(y), S) * S + wrap(Math.round(x), S)) * 3;
-    this.d[i] = this.d[i]! * (1 - a) + c[0] * a;
-    this.d[i + 1] = this.d[i + 1]! * (1 - a) + c[1] * a;
-    this.d[i + 2] = this.d[i + 2]! * (1 - a) + c[2] * a;
+    const j = wrap(Math.round(y), S) * S + wrap(Math.round(x), S);
+    const i = j * 3;
+    const m0 = this.m[j]!;
+    const m1 = a + m0 * (1 - a);
+    const k = m0 * (1 - a);
+    this.d[i] = (this.d[i]! * k + c[0] * a) / m1;
+    this.d[i + 1] = (this.d[i + 1]! * k + c[1] * a) / m1;
+    this.d[i + 2] = (this.d[i + 2]! * k + c[2] * a) / m1;
+    this.m[j] = m1;
   }
   /** fn(u, v, x, y) with y = 0 at the visual TOP of the face */
   fill(fn: (u: number, v: number, x: number, y: number) => RGB): void {
@@ -108,6 +119,7 @@ class Img {
         this.d[i] = c[0];
         this.d[i + 1] = c[1];
         this.d[i + 2] = c[2];
+        this.m[y * S + x] = 1;
       }
     }
   }
@@ -136,15 +148,33 @@ class Img {
       }
     }
   }
+  /** TILE x TILE RGBA (nearest 2x upscale; image row 0 = visual top = texture t = 1) */
   rgba(): Uint8ClampedArray {
-    const out = new Uint8ClampedArray(S * S * 4);
-    for (let y = 0; y < S; y++) {
-      for (let x = 0; x < S; x++) {
-        const i = (y * S + x) * 3;
-        const o = ((S - 1 - y) * S + x) * 4; // flip: image row 0 = visual top = texture t = 1
+    const out = new Uint8ClampedArray(TILE * TILE * 4);
+    for (let Y = 0; Y < TILE; Y++) {
+      for (let X = 0; X < TILE; X++) {
+        const i = ((Y >> 1) * S + (X >> 1)) * 3;
+        const o = ((TILE - 1 - Y) * TILE + X) * 4;
         out[o] = this.d[i]!;
         out[o + 1] = this.d[i + 1]!;
         out[o + 2] = this.d[i + 2]!;
+        out[o + 3] = 255;
+      }
+    }
+    return out;
+  }
+  /** composites this overlay (coverage `m`) over a TILE x TILE visual-order RGB base (Float32 0..255) -> layer RGBA */
+  over(base: Float32Array): Uint8ClampedArray {
+    const out = new Uint8ClampedArray(TILE * TILE * 4);
+    for (let Y = 0; Y < TILE; Y++) {
+      for (let X = 0; X < TILE; X++) {
+        const j = (Y >> 1) * S + (X >> 1);
+        const m = this.m[j]!;
+        const bi = (Y * TILE + X) * 3;
+        const o = ((TILE - 1 - Y) * TILE + X) * 4;
+        out[o] = base[bi]! * (1 - m) + this.d[j * 3]! * m;
+        out[o + 1] = base[bi + 1]! * (1 - m) + this.d[j * 3 + 1]! * m;
+        out[o + 2] = base[bi + 2]! * (1 - m) + this.d[j * 3 + 2]! * m;
         out[o + 3] = 255;
       }
     }
@@ -227,8 +257,8 @@ function grassTop(im: Img, pal: RGB[], s: number): void {
   }
 }
 
-function grassSide(im: Img, pal: RGB[], s: number): void {
-  dirtFill(im, s + 2);
+function grassSide(im: Img, pal: RGB[], s: number, overlay = false): void {
+  if (!overlay) dirtFill(im, s + 2);
   const depth = (x: number): number => 11 + 8 * vn(x / S, 0.3, 8, s) + 3 * vn(x / S, 0.6, 16, s + 1);
   for (let x = 0; x < S; x++) {
     const d = depth(x);
@@ -551,11 +581,150 @@ function fallback(name: string): (im: Img) => void {
   return (im) => im.fill((u, v) => scale(base, 0.9 + 0.2 * fbm(u, v, 4, 3, h & 255)));
 }
 
-/** tiles that get hash-picked variants (rolled copies of the painting; the shader also flips / rotates per block) */
+// ------------------------------------------------------------------------------------------------- AI-painted tiles
+// 1024 px hand-painted seamless tiles (FLORA, see docs/THIRD_PARTY.md), pre-downscaled to 128 px with wrap-aware filtering
+// (assets-src/textures -> ./textures). They replace the procedural paintings when they load; if a PNG is missing or fails
+// to decode the procedural tile stays. Each is re-graded onto the warm-key palette (target mean colour, kept contrast and
+// chroma) so lawns / beaches / dirt sit in the lighting instead of fighting it.
+const PNGS = import.meta.glob('./textures/*.png', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
+
+interface AiTile {
+  /** [source png, roll x, roll y] per variant layer */
+  v: [string, number, number, number?][];
+  /** graded mean colour */
+  target: string;
+  /** contrast around the mean luminance (1 = as painted) */
+  k?: number;
+  /** fraction of the painted chroma deviation kept (flowers, pebbles) */
+  ch?: number;
+}
+const R2 = (n: string, t = 0.5): [string, number, number, number?][] => [[n, 0, 0], [n, t, 0.5 + t * 0.25]];
+const AI: Record<string, AiTile> = {
+  grass_top: { v: [['grass_b', 0, 0, 0.75], ['grass_b', 0.5, 0.5, 0.75], ['grass_a', 0, 0, 1.5], ['grass_b', 0.25, 0.75, 0.75]], target: '#64B050', ch: 0.5 },
+  grass_forest_top: { v: [['grass_b', 0.25, 0.25, 0.75], ['grass_b', 0.75, 0.5, 0.75], ['grass_a', 0.5, 0.5, 1.5]], target: '#3F9150', ch: 0.5 },
+  grass_high_top: { v: [['grass_b', 0.1, 0.6, 0.75], ['grass_b', 0.6, 0.1, 0.75], ['grass_a', 0.6, 0.9, 1.5]], target: '#9CC45E', ch: 0.5 },
+  grass_flower_top: { v: [['grass_b', 0, 0, 0.75], ['grass_b', 0.5, 0.5, 0.75], ['grass_b', 0.25, 0.75, 0.75]], target: '#64B050', ch: 1.0 },
+  sand: { v: [['sand_a', 0, 0], ['sand_b', 0, 0], ['sand_a', 0.5, 0.5], ['sand_b', 0.5, 0.5]], target: '#EFD38A', k: 1.0, ch: 0.7 },
+  dirt: { v: [['dirt_a', 0, 0], ['dirt_a', 0.5, 0.5], ['dirt_b', 0, 0], ['dirt_a', 0.25, 0.75]], target: '#8C7650', k: 1.0, ch: 0.4 },
+  path_top: { v: [['sand_b', 0, 0, 1.6], ['sand_b', 0.5, 0.5, 1.6]], target: '#C8AA78', ch: 0.5 },
+  packed_top: { v: R2('sand_a'), target: '#CDB77A', k: 1.2, ch: 0.5 },
+  cobble: { v: R2('cobble_a'), target: '#AAA49F', k: 0.95, ch: 0.5 },
+  stone_cool: { v: R2('rock_strata'), target: '#A59CB5', k: 1.0, ch: 0.35 },
+  stone_warm: { v: R2('rock_strata'), target: '#C9A98C', k: 1.0, ch: 0.7 },
+  stone_dark: { v: R2('rock_strata'), target: '#7C6E88', k: 1.0, ch: 0.35 },
+  log_oak_side: { v: [['bark_oak', 0, 0], ['bark_oak', 0.33, 0.5], ['bark_oak', 0.66, 0.2]], target: '#8E6C40', k: 0.95, ch: 0.5 },
+  log_pine_side: { v: [['bark_oak', 0.1, 0.1], ['bark_oak', 0.5, 0.8], ['bark_oak', 0.8, 0.4]], target: '#9A7048', k: 0.95, ch: 0.5 },
+  log_birch_side: { v: R2('bark_birch'), target: '#E6DDCC', k: 1.0, ch: 0.8 },
+  leaves_oak: { v: [['leaves_oak', 0, 0], ['leaves_oak', 0.33, 0.5], ['leaves_oak', 0.66, 0.2]], target: '#3F9A52', k: 0.95, ch: 0.6 },
+  leaves_pine: { v: [['leaves_pine', 0, 0], ['leaves_pine', 0.33, 0.5], ['leaves_pine', 0.66, 0.2]], target: '#2F7549', k: 0.95, ch: 0.6 },
+};
+/** grass sides = graded AI dirt + procedural grass fringe overlay */
+const SIDES: Record<string, { pal: RGB[]; s: number }> = {
+  grass_side: { pal: MEADOW, s: 1 },
+  grass_forest_side: { pal: FOREST, s: 2 },
+  grass_high_side: { pal: HIGH, s: 3 },
+};
+/** tiles whose tops may be rotated + offset per block (no directional pattern) and sides offset sideways */
+const FREE_ALL = ['grass_top', 'grass_forest_top', 'grass_high_top', 'grass_flower_top', 'sand', 'dirt', 'path_top', 'cobble', 'stone_cool', 'stone_warm', 'stone_dark', 'leaves_oak', 'leaves_pine', 'gravel', 'clay', 'mud', 'snow_top', 'packed_top'];
+/** tiles whose sides may be offset sideways (vertical structure survives) */
+const FREE_SIDE = ['grass_side', 'grass_forest_side', 'grass_high_side', 'log_oak_side', 'log_pine_side', 'log_birch_side', 'log_palm_side'];
+
+const loaded = new Map<string, Float32Array>(); // png name -> TILE*TILE*3 visual-order RGB 0..255
+let loading: Promise<void> | null = null;
+
+/** decodes every bundled PNG via canvas (halving box-filter steps down to TILE if a PNG is larger) */
+export function preloadTiles(): Promise<void> {
+  if (loading) return loading;
+  loading = Promise.all(
+    Object.entries(PNGS).map(async ([path, url]) => {
+      const name = path.replace(/^.*\//, '').replace(/\.png$/, '');
+      try {
+        const blob = await (await fetch(url)).blob();
+        const bmp = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+        const cv = document.createElement('canvas');
+        cv.width = cv.height = TILE;
+        const cx = cv.getContext('2d', { willReadFrequently: true })!;
+        cx.imageSmoothingEnabled = true;
+        cx.imageSmoothingQuality = 'high';
+        let w = bmp.width;
+        let src: CanvasImageSource = bmp;
+        while (w > TILE * 2) {
+          w = Math.max(TILE, w >> 1);
+          const t = document.createElement('canvas');
+          t.width = t.height = w;
+          const tc = t.getContext('2d')!;
+          tc.imageSmoothingQuality = 'high';
+          tc.drawImage(src, 0, 0, w, w);
+          src = t;
+        }
+        cx.drawImage(src, 0, 0, TILE, TILE);
+        const px = cx.getImageData(0, 0, TILE, TILE).data;
+        const f = new Float32Array(TILE * TILE * 3);
+        for (let i = 0; i < TILE * TILE; i++) {
+          f[i * 3] = px[i * 4]!;
+          f[i * 3 + 1] = px[i * 4 + 1]!;
+          f[i * 3 + 2] = px[i * 4 + 2]!;
+        }
+        loaded.set(name, f);
+      } catch (e) {
+        console.warn(`[voxel] texture ${name} failed to load, procedural fallback`, e);
+      }
+    }),
+  ).then(() => undefined);
+  return loading;
+}
+if (typeof document !== 'undefined') void preloadTiles();
+
+const luma = (r: number, g: number, b: number): number => 0.299 * r + 0.587 * g + 0.114 * b;
+
+/** rolled + graded copy of a loaded PNG (visual order RGB floats), or null if it has not loaded */
+function gradedAi(cfg: AiTile, vi: number): Float32Array | null {
+  const [src, rx, ry, kk] = cfg.v[vi]!;
+  const f = loaded.get(src);
+  if (!f) return null;
+  const n = TILE * TILE;
+  let mr = 0;
+  let mg = 0;
+  let mb = 0;
+  for (let i = 0; i < n; i++) {
+    mr += f[i * 3]!;
+    mg += f[i * 3 + 1]!;
+    mb += f[i * 3 + 2]!;
+  }
+  mr /= n;
+  mg /= n;
+  mb /= n;
+  const lm = luma(mr, mg, mb);
+  const t = hx(cfg.target);
+  const k = kk ?? cfg.k ?? 1;
+  const ch = cfg.ch ?? 0.7;
+  const dx = Math.round(rx * TILE);
+  const dy = Math.round(ry * TILE);
+  const out = new Float32Array(n * 3);
+  for (let y = 0; y < TILE; y++) {
+    for (let x = 0; x < TILE; x++) {
+      const si = (wrap(y + dy, TILE) * TILE + wrap(x + dx, TILE)) * 3;
+      const r = f[si]!;
+      const g = f[si + 1]!;
+      const b = f[si + 2]!;
+      const q = luma(r, g, b) / lm;
+      const rr = 1 + (q - 1) * k; // contrast about the mean
+      const o = (y * TILE + x) * 3;
+      out[o] = Math.min(255, Math.max(0, rr * t[0] + ch * (r - q * mr)));
+      out[o + 1] = Math.min(255, Math.max(0, rr * t[1] + ch * (g - q * mg)));
+      out[o + 2] = Math.min(255, Math.max(0, rr * t[2] + ch * (b - q * mb)));
+    }
+  }
+  return out;
+}
+
+/** variants per tile (procedural: rolled repaintings; AI tiles define their own count) */
 const VARIANTS: Record<string, number> = {
   grass_top: 6, grass_forest_top: 6, grass_high_top: 5, grass_flower_top: 5, sand: 6, dirt: 5, log_oak_side: 3, log_pine_side: 3, leaves_oak: 3, leaves_pine: 3, plaster: 2,
   grass_side: 2, grass_forest_side: 2, grass_high_side: 2, stone_cool: 2, stone_warm: 2, stone_dark: 2, gravel: 2, path_top: 2, packed_top: 2,
 };
+for (const [n, c] of Object.entries(AI)) VARIANTS[n] = c.v.length;
+for (const n of Object.keys(SIDES)) VARIANTS[n] = 4;
 
 export interface Atlas {
   texture: DataArrayTexture;
@@ -569,13 +738,23 @@ export interface Atlas {
 
 /** paints `names` (+ variants; layer = running offset) into one sRGB texture array */
 export function buildAtlas(names: string[], maxAnisotropy = 8): Atlas {
+  // layer order: free (rotate + offset) tiles first, then side-offset tiles, then the rest (the shader tests tile < uVoxFree)
+  const rank = (n: string): number => (FREE_ALL.includes(n) ? 0 : FREE_SIDE.includes(n) ? 1 : 2);
+  const order = names.slice().sort((a, b) => rank(a) - rank(b) || names.indexOf(a) - names.indexOf(b));
   let layers = 0;
-  for (const n of names) layers += VARIANTS[n] ?? 1;
-  const data = new Uint8Array(S * S * 4 * layers);
+  let freeA = 0;
+  let freeB = 0;
+  for (const n of order) {
+    layers += VARIANTS[n] ?? 1;
+    if (rank(n) === 0) freeA = layers;
+    if (rank(n) <= 1) freeB = layers;
+  }
+  const data = new Uint8Array(TILE * TILE * 4 * layers);
   const index = new Map<string, number>();
   const variants = new Map<string, number>();
+  const slots: { name: string; v: number; layer: number }[] = [];
   let layer = 0;
-  for (const name of names) {
+  for (const name of order) {
     const nv = VARIANTS[name] ?? 1;
     index.set(name, layer);
     variants.set(name, nv);
@@ -584,11 +763,51 @@ export function buildAtlas(names: string[], maxAnisotropy = 8): Atlas {
       VS = v;
       (PAINT[name] ?? fallback(name))(im);
       VS = 0;
-      data.set(im.rgba(), layer * S * S * 4);
+      data.set(im.rgba(), layer * TILE * TILE * 4);
+      slots.push({ name, v, layer });
       layer++;
     }
   }
-  const texture = new DataArrayTexture(data, S, S, layers);
+  /** overwrites procedural layers with graded AI tiles; a tile whose PNG is missing keeps its procedural painting */
+  const applyAi = (): void => {
+    const dirtCache = new Map<number, Float32Array | null>();
+    const dirt = (vi: number): Float32Array | null => {
+      if (!dirtCache.has(vi)) dirtCache.set(vi, gradedAi(AI.dirt!, vi % AI.dirt!.v.length));
+      return dirtCache.get(vi)!;
+    };
+    for (const sl of slots) {
+      const cfg = AI[sl.name];
+      let rgba: Uint8ClampedArray | null = null;
+      if (cfg) {
+        const g = gradedAi(cfg, sl.v);
+        if (g) {
+          rgba = new Uint8ClampedArray(TILE * TILE * 4);
+          for (let Y = 0; Y < TILE; Y++) {
+            for (let X = 0; X < TILE; X++) {
+              const b = (Y * TILE + X) * 3;
+              const o = ((TILE - 1 - Y) * TILE + X) * 4;
+              rgba[o] = g[b]!;
+              rgba[o + 1] = g[b + 1]!;
+              rgba[o + 2] = g[b + 2]!;
+              rgba[o + 3] = 255;
+            }
+          }
+        }
+      } else if (SIDES[sl.name]) {
+        const base = dirt(sl.v);
+        if (base) {
+          const side = SIDES[sl.name]!;
+          const im = new Img(false);
+          VS = sl.v;
+          grassSide(im, side.pal, side.s, true);
+          VS = 0;
+          rgba = im.over(base);
+        }
+      }
+      if (rgba) data.set(rgba, sl.layer * TILE * TILE * 4);
+    }
+  };
+  const texture = new DataArrayTexture(data, TILE, TILE, layers);
   texture.format = RGBAFormat;
   texture.type = UnsignedByteType;
   texture.colorSpace = SRGBColorSpace;
@@ -598,7 +817,17 @@ export function buildAtlas(names: string[], maxAnisotropy = 8): Atlas {
   texture.generateMipmaps = true;
   texture.anisotropy = Math.max(16, maxAnisotropy); // three clamps to the device maximum
   texture.userData.sandLayer = index.get('sand') ?? -1;
+  texture.userData.freeAll = freeA;
+  texture.userData.freeSide = freeB;
   texture.needsUpdate = true;
   texture.name = 'voxel.tiles';
+  // the PNGs usually finished decoding during the wasm boot; if not, upgrade the layers in place when they arrive
+  if (loaded.size > 0) applyAi();
+  void preloadTiles().then(() => {
+    if (loaded.size > 0) {
+      applyAi();
+      texture.needsUpdate = true;
+    }
+  });
   return { texture, index, variants, names, layers };
 }

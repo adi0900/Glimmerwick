@@ -14,7 +14,8 @@
  * The water is a separate translucent ShaderMaterial (depth gradient, animated normals, foam, sky + sun reflection,
  * shared haze via `gwFog`, ripple rings).
  */
-import { Color, FrontSide, ShaderMaterial, Vector4, type DataArrayTexture, type MeshToonMaterial } from 'three';
+import { Color, FrontSide, ShaderMaterial, Vector2, Vector4, type DataArrayTexture, type MeshToonMaterial } from 'three';
+import { TILE } from './atlas';
 import type { Ctx } from '../../engine/types';
 
 const VERT_PARS = /* glsl */ `
@@ -54,6 +55,7 @@ float gwBevelAmt;
 float gwWet;
 float gwShore;
 uniform float uVoxSand;
+uniform vec2 uVoxFree;
 varying vec2 vVoxUv;
 varying vec4 vVoxLight;
 flat varying float vVoxTF;
@@ -86,22 +88,37 @@ vec3 gwBP = floor( vGwWorld - gwVN[ gwFace ] * 0.5 );
 float gwJ = gwVoxH( gwBP );
 float gwJ2 = gwVoxH( gwBP + vec3( 11.0, 5.0, 3.0 ) );
 vec2 gwUv = vVoxUv;
+float gwFreeA = step( gwTileF, uVoxFree.x - 0.5 );
+float gwFreeB = step( gwTileF, uVoxFree.y - 0.5 );
 if ( gwFace == 2 || gwFace == 3 ) {
-  if ( gwJ2 > 0.5 ) gwUv = gwUv.yx;
-  if ( fract( gwJ2 * 7.0 ) > 0.5 ) gwUv.x = 1.0 - gwUv.x;
-  if ( fract( gwJ2 * 13.0 ) > 0.5 ) gwUv.y = 1.0 - gwUv.y;
+  if ( gwFreeA > 0.5 ) {
+    // painted tiles: pure 90 degree rotations (never mirrored) + a random seamless offset, so no two blocks match
+    float gwRot = floor( fract( gwJ2 * 7.0 ) * 4.0 );
+    vec2 gwQ = gwUv;
+    if ( gwRot < 1.0 ) gwUv = gwQ;
+    else if ( gwRot < 2.0 ) gwUv = vec2( 1.0 - gwQ.y, gwQ.x );
+    else if ( gwRot < 3.0 ) gwUv = vec2( 1.0 - gwQ.x, 1.0 - gwQ.y );
+    else gwUv = vec2( gwQ.y, 1.0 - gwQ.x );
+    gwUv += vec2( fract( gwJ2 * 13.0 ), fract( gwJ * 29.0 ) );
+  } else {
+    if ( gwJ2 > 0.5 ) gwUv = gwUv.yx;
+    if ( fract( gwJ2 * 7.0 ) > 0.5 ) gwUv.x = 1.0 - gwUv.x;
+    if ( fract( gwJ2 * 13.0 ) > 0.5 ) gwUv.y = 1.0 - gwUv.y;
+  }
+} else if ( gwFreeB > 0.5 ) {
+  gwUv.x += fract( gwJ2 * 7.0 );
 } else if ( fract( gwJ2 * 7.0 ) > 0.5 ) {
   gwUv.x = 1.0 - gwUv.x;
 }
 float gwLayer = gwTileF + min( floor( fract( gwJ * 91.7 ) * gwNV ), gwNV - 1.0 );
 // sharp-bilinear: texel edges stay crisp up close (1/3 texel soft), plain trilinear + anisotropic when minified;
 // explicit gradients (x0.7 = about -0.5 mip bias) keep the mips / 16x anisotropy of the ORIGINAL uv
-vec2 gwTuv = gwUv * 64.0;
+vec2 gwTuv = gwUv * ${TILE}.0;
 vec2 gwDx = dFdx( gwUv );
 vec2 gwDy = dFdy( gwUv );
 vec2 gwFw = max( fwidth( gwTuv ), vec2( 0.34 ) );
 vec2 gwSt = floor( gwTuv ) + clamp( ( fract( gwTuv ) - 0.5 ) / gwFw + 0.5, 0.0, 1.0 );
-vec4 gwT = textureGrad( uBlockTiles, vec3( gwSt / 64.0, gwLayer ), gwDx * 0.7, gwDy * 0.7 );
+vec4 gwT = textureGrad( uBlockTiles, vec3( gwSt / ${TILE}.0, gwLayer ), gwDx * 0.7, gwDy * 0.7 );
 vec2 gwMp = ( gwFace == 2 || gwFace == 3 ) ? vGwWorld.xz : vec2( vGwWorld.x + vGwWorld.z, vGwWorld.y * 1.4 );
 float gwM = ( gwVoxVN( gwMp * 0.045 ) - 0.5 ) * 0.9 + ( gwVoxVN( gwMp * 0.16 + 7.3 ) - 0.5 ) * 0.5 + ( gwVoxVN( gwMp * 0.55 + 3.1 ) - 0.5 ) * 0.25;
 vec3 gwAlb = gwT.rgb * ( 0.94 + 0.12 * gwJ );
@@ -242,6 +259,7 @@ export function makeBlockMaterial(ctx: Ctx, tiles: DataArrayTexture, waterY: num
     base.call(material, shader, renderer);
     shader.uniforms.uBlockTiles = { value: tiles };
     shader.uniforms.uVox = { value: vox };
+    shader.uniforms.uVoxFree = { value: new Vector2((tiles.userData as any).freeAll ?? 0, (tiles.userData as any).freeSide ?? 0) };
     shader.uniforms.uVoxSand = { value: (tiles.userData as any).sandLayer ?? -1 };
     shader.vertexShader = replaceOnce(shader.vertexShader, 'void main() {', VERT_PARS + '\nvoid main() {', 'vertex main');
     shader.vertexShader = replaceOnce(shader.vertexShader, '#include <project_vertex>', VERT_MAIN, 'project_vertex');
