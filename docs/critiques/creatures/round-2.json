@@ -1,0 +1,14 @@
+{
+  "module": "creatures",
+  "round": 2,
+  "scores": { "1": 7, "2": 7, "3": 6, "4": 6, "5": 7, "6": 7, "7": 6, "8": 6, "9": 8 },
+  "pass": false,
+  "top_defects": [
+    "Faces: Tidler eyes enclosed in a black visor frame with a black slot mouth reads as shouting (19), Sprigfox dark top-row lids + maroon muzzle cluster read angry (20), avatar eyes huge in brown sockets with no pupils and a ragged chin read startled (21, 06). Fix: Tidler remove frame and add a 4-5 voxel smile curve; Sprigfox remove dark top row, iris 3x4 one green, 2x2 highlight, single 2x1 nose and 3-voxel w mouth; avatar iris 2x3 dark brown + highlight, drop brown ring (skin x0.9), 4-voxel smile skin x0.7, squared chin row.",
+    "Tidler silhouette and tail: rigid horizontal tail plank with red rim and three confetti fin clusters (08, 07, 14 crop, hop_strip #3-#4); no single iconic idea at 64 px. Fix: one tall tapering crest + round curled tail fin, 3-segment tail with sway lag (0.25 s per segment, +/-12 deg), black silhouette gate at 32/64 px.",
+    "Sprigfox clutter: ~8 colours on the head (ear stripes, sprout, mane band, muzzle cluster, chest leaf) and a detached green plume (05, 20, 02). Fix: head to 3-4 tones, delete chest leaf and mane band, attach plume to tail root, sway +/-8 deg.",
+    "Night and glow still flat, no rim/shade tint: night bodies saturated ultramarine or brown mud, glow caps flat cyan blocks without ground spill (13, 03, 04). Fix: shade ramp x0.78/x0.55 mixed 25% toward #5B4B8A, fresnel rim pow 3 at 0.2-0.3, glow emissive x3 + bloom threshold 0.9 strength 0.6, ground light r1.2-2 m intensity 0.25-0.4, pulse 0.85-1.15 at 0.5 Hz, night ramp toward #8FB0FF.",
+    "Motion polish and in-game readability: walk/run body bob only ~1 voxel, no dust or landing squash read, shadow does not shrink on hop, avatar sprint has no dust and the back of the head keeps concentric ring hair + pale chevron (walk/hop/run strips, avatar_strip); live game creature is a 40 px blob behind trunks (live.png); pack 10/14 faces unreadable at far/64 px. Fix: bob 1.5-2 / 3 voxels, ear+tail lag 2-3 frames, landing squash 0.85 y 80 ms + 6-8 dust voxels, flat 2-tone hair with a parting, add a gameplay-camera shot at 6-8 m and 32/64 px silhouette gate."
+  ],
+  "plateau": false
+}
