@@ -72,7 +72,9 @@ function buildUrl(base, s, size) {
     p.set('hud', '1');
     p.set('stats', '1');
   }
-  p.set('freeze', '1');
+  // stills are frozen for determinism; filmstrips must run live, otherwise they film a stopped world
+  // (override either way with --param "freeze=0|1")
+  if (!s.filmstrip) p.set('freeze', '1');
   p.set('w', String(size[0]));
   p.set('h', String(size[1]));
   if (s.param) for (const [k, v] of new URLSearchParams(s.param)) p.set(k, v);
