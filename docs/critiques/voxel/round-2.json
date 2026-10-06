@@ -1,0 +1,14 @@
+{
+  "module": "voxel",
+  "round": 2,
+  "scores": { "1": 6, "2": 5, "3": 5, "4": 5, "5": 4, "6": 5, "7": 6, "8": 4, "9": 9 },
+  "pass": false,
+  "top_defects": [
+    "Up-close surfaces blurry/tiled/repeated: smeared 1 m-tile sand with hairline waterline seam (03, crop C), mirrored owl-face stain on every dirt block (13), leopard-spot bark and stretched pine leaf (07), plaster block grid (crop D), faint bevel. Fix: 16x aniso + gutters/mip bias, 4-6 non-mirrored hashed variants per top face, world-space macro noise (6-24 m, +-8-10% value), repaint sand/dirt/bark, bevel 5-7% on all opaque blocks, wet-sand band.",
+    "World not lit by the sky: sunset skybox over noon-lit trees (A), no sun disc/halo/shafts/rim, weak warm/cool key:fill, milky lavender horizon band with moire rings (01), murky night and under-canopy (12, 07). Fix: drive shader from ART_BIBLE s2 (key:fill ~2.5:1, shadow #5B4B8A >=12% lum), sun bloom + shafts at <25 deg, foliage back-light, cut horizon fog 40-50% and cap band <=12% screen, moon/stars/lanterns/fireflies at night.",
+    "Palette discipline: acid-green lawn (single hue family), brick-maroon dirt as darkest saturated mass (08, E, A), flat indigo strata (13). Fix: 3-tone hue-shifted grass ramp #9BE564/#5CC95A/#2E9E6B with +-6% jitter, warm umber dirt #8B5A3C-#A06A44, one lavender-warm rock ramp, no lit face under ~20% luminance.",
+    "Generated-looking shapes: hollow arch/table trees (08, E), zig-zag palms (A), 1-voxel stair paths and four identical prop-less cottages (10, B), perfectly elliptical pond and constant-width stream (02). Fix: 3+ cottage variants with chimney/porch/fence/lantern props, 2-3-wide meandering paths, rounded 3-layer oak, curved-trunk palms, noise-warped pond outline with reeds/lily pads.",
+    "Water/shoreline: aliased sine-stripe and moire ripples (A, C, 01, 02), hairline seam and glowing orange lips at the waterline, white-hot slivers at stream/pond cuts (08, E), stamped oval shallows, no foam band. Fix: depth-based foam 0.4-0.8 m animated, Toksvig-filtered normals with distance fade (~120 m), water 0.06-0.1 m below shore tops, clamp glitter <=1.2, noise-warped bathymetry gradient."
+  ],
+  "plateau": false
+}
