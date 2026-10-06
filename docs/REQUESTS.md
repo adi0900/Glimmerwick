@@ -20,3 +20,10 @@ Format:  `- [ ] [from → to] YYYY-MM-DD  what you need, why, and the workaround
 - [ ] [voxel-world -> movement] 2026-10-06  Player / creatures still stand on `HeightQuery` (1 m step pops, trunks / leaves are not ground). Replace with `VoxelQuery::aabb_sweep` + `ground_y`; edits are visible to both immediately. `world.dirty` is per-step, use `vox.chunks` versions.
 - [ ] [voxel-world -> voxel-flora / voxel-creatures] 2026-10-06  Trees and bushes are blocks (`flora` channel = decor only, kinds >= 32 + ferns, re-grounded on block tops); `_slice/flora.ts` still draws those as smooth meshes. Wind: leaf blocks sway via `aSway`; micro-voxel decor should follow the same ToonLit wind.
 - [ ] [voxel-world -> foundation-rust] 2026-10-06  Please add `Terrain::water_surface(x, z) -> Option<f32>` (open request above): voxel pond / stream water exists as blocks (`WATER` cells above sea level), the sim can answer it exactly from the world now.
+
+## movement implementer (phase 1, 2026-10-06)
+1. **Spec amendment (analyst)** - (a) current water sink / gravity and swim-pitch easing (we use sink 0.006 + a buoyancy spring, tunable); (b) fluid contact box; (c) pose / sneak camera smoothing; (d) numeric sprint FOV (we use x1.12, ease 0.15 s); (e) item-use factor; (f) which axis order the 1.14+ collision really uses (we follow section 3.5: larger |v| first).
+2. **voxel-world owner** - collision is full cubes only, so the spec's 0.6 step-up (TV-13: 0.5 / 0.6 / 0.625 high obstacles) cannot be exercised; partial-height shapes (slabs, stairs, snow layers) in `aabb_sweep` would make it matter. Also an additive `impl BlockSource for VoxelQuery` (sim_player wraps it in a 5-line adapter today).
+3. **Input / design** - `Input` has no sneak / crouch button; sneak (spec 3.6 ledge safety) is not implemented. Decide whether the game wants it.
+4. **Orchestrator note** - default `step_height` is 1.0 instead of the spec's 0.6 (1 m terraces must be walkable by children); one-line change in `PlayerTuning` if the design disagrees.
+5. **Pre-existing, not mine** - `web` typecheck: `src/modules/voxel/index.ts(400,18): Property 'view' does not exist on type 'ViewInfo'` (voxel owner).

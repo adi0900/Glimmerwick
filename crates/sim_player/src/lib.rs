@@ -1,21 +1,24 @@
 //! # sim_player - the player character
 //!
-//! Reference slice: kinematic controller ([`controller`]) driven by `Input`, publishing channel
-//! `player` (`f32`, stride 16, interpolated), commands `player.set_tool` / `debug.teleport`, query
-//! `player.info`, events 200-206, and a `player` save section.
+//! Voxel kinematic controller ([`controller`]; movement model from `docs/specs/MOVEMENT_SPEC.md`, voxel AABB collision
+//! through `sim_core::blocks`) driven by `Input`, publishing channel `player` (`f32`, stride 16, interpolated),
+//! commands `player.set_tool` / `player.tune` / `debug.teleport`, queries `player.info` / `player.tuning`, events
+//! 200-206, and a `player` save section.
 //!
-//! The authoritative state is the [`PlayerBody`] component; `Position`, `Velocity` and `Yaw` on the
-//! same entity are write-only mirrors so other crates can find the player through `sim_core`
-//! components without depending on this crate.
+//! The authoritative state is the [`PlayerBody`] component; `Position`, `Velocity` and `Yaw` on the same entity are
+//! write-only mirrors (physical position) so other crates can find the player through `sim_core` components without
+//! depending on this crate. The published `player` channel carries the *render-facing* position (physical position plus
+//! the step-up easing offset).
 
 mod controller;
 
-pub use controller::{Body, Happened, Intent, PlayerTuning, anim, step as step_body};
+pub use controller::{Body, Bounds, Happened, Intent, PlayerTuning, REST_VY, TICK_HZ, anim, step as step_body};
 
 use bevy_app::{App, Plugin, Startup, Update};
 use bevy_ecs::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sim_core::blocks::{self, BlockId, BlockSource, VoxelQuery};
 use sim_core::math::{self, Vec3};
 use sim_core::{
     ChannelId, ChannelSpec, Channels, EventBus, HeightQuery, Id, IdAllocator, Input, Interact, Interactable, Player, Position,
@@ -28,7 +31,7 @@ pub const PLAYER_STRIDE: usize = 16;
 /// Event kinds of this crate (range 200-299). Payloads: see `docs/BRIDGE_API.md`.
 pub mod events {
     use sim_core::EventKind;
-    /// Jump started. `f` = take-off speed.
+    /// Jump started. `f` = take-off speed (m/s).
     pub const JUMP: EventKind = EventKind::player(0);
     /// Landed after a fall. `a` = impact speed (m/s).
     pub const LAND: EventKind = EventKind::player(1);
@@ -75,9 +78,9 @@ struct PlayerSave {
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         let player = app.register_channel::<f32>(
-            ChannelSpec::records::<f32>("player", PLAYER_STRIDE as u32, 1)
-                .interpolated()
-                .doc("pos xyz,vel xyz,yaw,anim_state,anim_t,grounded,water_depth,tool,speed01,look_target_id,-,-"),
+            ChannelSpec::records::<f32>("player", PLAYER_STRIDE as u32, 1).interpolated().doc(
+                "pos xyz (render-facing: step-up eased),vel xyz m/s,yaw,anim_state,anim_t,grounded,water_depth,tool,speed01,look_target_id,sprinting,land_recovery01",
+            ),
         );
         app.insert_resource(PlayerChannels { player }).init_resource::<PlayerTuning>();
 
@@ -89,12 +92,100 @@ impl Plugin for PlayerPlugin {
     }
 }
 
-// --- systems -------------------------------------------------------------------------------------
+// --- block sources ---------------------------------------------------------------------------------------
 
-fn spawn_player(mut commands: Commands, spawn: Res<SpawnPoints>, terrain: Res<HeightQuery>, mut ids: ResMut<IdAllocator>) {
+/// The `VoxelQuery` resource as a plain `BlockSource`.
+struct VoxelRef<'a>(&'a VoxelQuery);
+
+impl BlockSource for VoxelRef<'_> {
+    fn block(&self, x: i32, y: i32, z: i32) -> BlockId {
+        self.0.block(x, y, z)
+    }
+}
+
+/// Fallback when no voxel world is installed (unit tests with the flat default terrain): solid below the
+/// heightfield, water below sea level.
+struct HeightfieldBlocks<'a>(&'a HeightQuery);
+
+impl BlockSource for HeightfieldBlocks<'_> {
+    fn block(&self, x: i32, y: i32, z: i32) -> BlockId {
+        let top = y as f32 + 1.0;
+        let h = self.0.height(x as f32 + 0.5, z as f32 + 0.5);
+        if top <= h + 1e-3 {
+            blocks::id::STONE
+        } else if top <= self.0.sea_level() + 1e-3 {
+            blocks::id::WATER
+        } else {
+            blocks::id::AIR
+        }
+    }
+}
+
+fn with_blocks<R>(world: &World, f: impl FnOnce(&dyn BlockSource) -> R) -> R {
+    match world.get_resource::<VoxelQuery>() {
+        Some(v) => f(&VoxelRef(v)),
+        None => f(&HeightfieldBlocks(world.resource::<HeightQuery>())),
+    }
+}
+
+fn bounds_of(terrain: &HeightQuery) -> Bounds {
+    let (min_x, min_z) = terrain.clamp(-1.0e9, -1.0e9);
+    let (max_x, max_z) = terrain.clamp(1.0e9, 1.0e9);
+    Bounds { min_x, min_z, max_x, max_z }
+}
+
+/// Where a body standing / floating at column `(x, z)` rests: `(feet y, floats in deep water)`. Walks down the column
+/// from above the world to the first ground block (solid, not vegetation) or water; deep water floats at the surface.
+fn standing_spot(world: &dyn BlockSource, x: f32, z: f32, t: &PlayerTuning) -> (f32, bool) {
+    let xi = x.floor() as i32;
+    let zi = z.floor() as i32;
+    let mut y = 64;
+    let mut found = None;
+    while y > -48 {
+        let id = world.block(xi, y, zi);
+        if blocks::is_ground(id) || blocks::is_liquid(id) {
+            found = Some((y, id));
+            break;
+        }
+        y -= 1;
+    }
+    let Some((top, id)) = found else {
+        return (0.0, false);
+    };
+    if blocks::is_liquid(id) {
+        let mut bottom = top;
+        while bottom > -48 && blocks::is_liquid(world.block(xi, bottom, zi)) {
+            bottom -= 1;
+        }
+        let depth = (top - bottom) as f32;
+        if depth > t.swim_float + 0.15 {
+            return ((top + 1) as f32 - t.swim_float - 0.15, true);
+        }
+        return ((bottom + 1) as f32, false);
+    }
+    ((top + 1) as f32, false)
+}
+
+// --- systems -------------------------------------------------------------------------------------------------
+
+fn spawn_player(
+    mut commands: Commands,
+    spawn: Res<SpawnPoints>,
+    terrain: Res<HeightQuery>,
+    voxels: Option<Res<VoxelQuery>>,
+    tuning: Res<PlayerTuning>,
+    mut ids: ResMut<IdAllocator>,
+) {
     let mut pos = spawn.player;
-    pos.y = terrain.height(pos.x, pos.z);
-    let body = Body::new(pos, 0.0);
+    let (y, swimming) = match voxels.as_deref() {
+        Some(v) => standing_spot(&VoxelRef(v), pos.x, pos.z, &tuning),
+        None => standing_spot(&HeightfieldBlocks(&terrain), pos.x, pos.z, &tuning),
+    };
+    pos.y = y;
+    let mut body = Body::new(pos, 0.0);
+    body.swimming = swimming;
+    body.on_ground = !swimming;
+    body.grounded = !swimming;
     commands.spawn((
         Player,
         ids.alloc(),
@@ -112,6 +203,7 @@ fn player_step(
     player: PlayerStepQuery,
     input: Res<Input>,
     terrain: Res<HeightQuery>,
+    voxels: Option<Res<VoxelQuery>>,
     tuning: Res<PlayerTuning>,
     mut bus: ResMut<EventBus>,
     mut happened: Local<Vec<Happened>>,
@@ -121,24 +213,29 @@ fn player_step(
         move_vec: input.move_vec(),
         camera_yaw: input.camera_yaw,
         sprint: input.held(buttons::SPRINT),
+        jump_held: input.held(buttons::JUMP),
         jump_pressed: input.just_pressed(buttons::JUMP),
     };
     happened.clear();
-    step_body(&mut body.0, &intent, &terrain, &tuning, &mut happened);
+    let bounds = bounds_of(&terrain);
+    match voxels.as_deref() {
+        Some(v) => step_body(&mut body.0, &intent, &VoxelRef(v), &bounds, &tuning, &mut happened),
+        None => step_body(&mut body.0, &intent, &HeightfieldBlocks(&terrain), &bounds, &tuning, &mut happened),
+    }
 
     for ev in happened.iter() {
         let at = body.0.pos;
         match *ev {
-            Happened::Jump => bus.emit(events::JUMP, 0.0, 0.0, at, tuning.jump_speed),
+            Happened::Jump => bus.emit(events::JUMP, 0.0, 0.0, at, tuning.jump_impulse * TICK_HZ),
             Happened::Land { impact } => bus.emit(events::LAND, impact, 0.0, at, 0.0),
             Happened::Splash { impact } => bus.emit(events::SPLASH, impact, 0.0, at, 0.0),
-            Happened::Footstep { biome } => {
-                bus.emit(events::FOOTSTEP, f32::from(biome), if intent.sprint { 1.0 } else { 0.0 }, at, 0.0);
+            Happened::Footstep { .. } => {
+                bus.emit(events::FOOTSTEP, f32::from(terrain.biome(at.x, at.z)), if body.0.sprinting { 1.0 } else { 0.0 }, at, 0.0);
             }
         }
     }
 
-    // Mirrors for other crates.
+    // Mirrors for other crates (physical position).
     pos.0 = body.0.pos;
     vel.0 = body.0.vel;
     yaw.0 = body.0.yaw;
@@ -215,16 +312,19 @@ fn player_react(
 fn publish_player(
     player: Single<(&PlayerBody, &PlayerState), With<Player>>,
     ids: Res<PlayerChannels>,
+    tuning: Res<PlayerTuning>,
     mut channels: ResMut<Channels>,
 ) {
     let (body, state) = player.into_inner();
     let b = &body.0;
+    let v = b.visual_pos();
+    let recover = if tuning.land_recovery_time > 0.0 { (b.recover / tuning.land_recovery_time).clamp(0.0, 1.0) } else { 0.0 };
     let mut w = channels.writer(ids.player);
     w.clear();
     w.extend_from_slice(&[
-        b.pos.x,
-        b.pos.y,
-        b.pos.z,
+        v.x,
+        v.y,
+        v.z,
         b.vel.x,
         b.vel.y,
         b.vel.z,
@@ -236,8 +336,8 @@ fn publish_player(
         f32::from(state.tool),
         b.speed01,
         state.look_target as f32,
-        0.0,
-        0.0,
+        if b.sprinting { 1.0 } else { 0.0 },
+        recover,
     ]);
 }
 
@@ -255,11 +355,10 @@ struct ToolArgs {
     tool: u8,
 }
 
-/// Height at which a body standing / floating at `(x, z)` rests.
-fn rest_height(terrain: &HeightQuery, tuning: &PlayerTuning, x: f32, z: f32) -> (f32, bool) {
-    let ground = terrain.height(x, z);
-    let depth = terrain.sea_level() - ground;
-    if depth > tuning.swim_depth + 0.08 { (terrain.sea_level() - tuning.swim_depth, true) } else { (ground, false) }
+#[derive(Deserialize)]
+struct TuneArgs {
+    key: String,
+    value: f32,
 }
 
 fn register_api(app: &mut App) {
@@ -268,11 +367,11 @@ fn register_api(app: &mut App) {
             return Err("x, y and z must be finite numbers".to_string());
         }
         let tuning = world.resource::<PlayerTuning>().clone();
-        let (x, z, ground, rest, swimming) = {
+        let (x, z, rest, swimming) = {
             let terrain = world.resource::<HeightQuery>();
             let (x, z) = terrain.clamp(a.x, a.z);
-            let (rest, swimming) = rest_height(terrain, &tuning, x, z);
-            (x, z, terrain.height(x, z), rest, swimming)
+            let (rest, swimming) = with_blocks(world, |bl| standing_spot(bl, x, z, &tuning));
+            (x, z, rest, swimming)
         };
         // An explicit y above the rest height drops the player from there.
         let y = a.y.map_or(rest, |y| y.max(rest));
@@ -283,14 +382,10 @@ fn register_api(app: &mut App) {
         };
         let b = &mut body.0;
         b.pos = Vec3::new(x, y, z);
-        b.vel = Vec3::ZERO;
-        b.grounded = y <= ground + 1e-3 && !swimming;
+        b.reset_motion();
+        b.on_ground = !swimming && y <= rest + 1e-3;
+        b.grounded = b.on_ground;
         b.swimming = swimming;
-        b.sliding = false;
-        b.jump_buffer = 0.0;
-        b.coyote = 0.0;
-        b.land_timer = 0.0;
-        b.stride = 0.0;
         pos.0 = b.pos;
         vel.0 = Vec3::ZERO;
         world.resource_mut::<Channels>().mark_discontinuity(ids.player);
@@ -310,6 +405,30 @@ fn register_api(app: &mut App) {
         Ok(json!({ "tool": a.tool }))
     });
 
+    // live tuning (F4 panel): `player.tuning` lists every constant, `player.tune` sets one, `player.tune_reset` restores defaults
+    app.register_query("player.tuning", |world: &World, _: Value| {
+        let t = world.resource::<PlayerTuning>();
+        let fields: Vec<Value> = PlayerTuning::FIELDS
+            .iter()
+            .map(|&(key, min, max, step)| json!({ "key": key, "value": t.get(key), "min": min, "max": max, "step": step }))
+            .collect();
+        Ok(json!({ "fields": fields, "walk_speed": t.walk_speed(), "sprint_speed": t.sprint_speed() }))
+    });
+    app.register_command("player.tune", |world: &mut World, a: TuneArgs| {
+        if !a.value.is_finite() {
+            return Err("value must be a finite number".to_string());
+        }
+        let mut t = world.resource_mut::<PlayerTuning>();
+        if !t.set(&a.key, a.value) {
+            return Err(format!("unknown tuning key '{}'", a.key));
+        }
+        Ok(json!({ "key": a.key, "value": a.value }))
+    });
+    app.register_command("player.tune_reset", |world: &mut World, _: Value| {
+        *world.resource_mut::<PlayerTuning>() = PlayerTuning::default();
+        Ok(json!({}))
+    });
+
     app.register_query("player.info", |world: &World, _: Value| {
         let mut q = world.try_query_filtered::<(&PlayerBody, &PlayerState, &Id), With<Player>>().ok_or("player not spawned yet")?;
         let (body, state, id) = q.iter(world).next().ok_or("no player entity")?;
@@ -320,16 +439,19 @@ fn register_api(app: &mut App) {
             "vel": [b.vel.x, b.vel.y, b.vel.z],
             "yaw": b.yaw,
             "grounded": b.grounded,
+            "on_ground": b.on_ground,
             "swimming": b.swimming,
+            "sprinting": b.sprinting,
             "sliding": b.sliding,
             "water_depth": b.water_depth,
+            "step_dy": b.step_dy,
             "anim_state": b.anim_state,
             "tool": state.tool,
             "look_target": state.look_target,
         }))
     });
 
-    app.register_event(events::JUMP, "player.jump", "f = take-off speed")
+    app.register_event(events::JUMP, "player.jump", "f = take-off speed m/s")
         .register_event(events::LAND, "player.land", "a = impact speed m/s")
         .register_event(events::SPLASH, "player.splash", "a = impact speed m/s (entered deep water)")
         .register_event(events::FOOTSTEP, "player.footstep", "a = biome id, b = 1 if sprinting")
@@ -339,7 +461,7 @@ fn register_api(app: &mut App) {
 
     app.register_save_section(
         "player",
-        1,
+        2,
         |w: &World| {
             let mut q = w.try_query_filtered::<(&PlayerBody, &PlayerState, &Id), With<Player>>();
             match q.as_mut().and_then(|q| q.iter(w).next().map(|(b, s, id)| (b.0.clone(), s.tool, id.0))) {
@@ -348,7 +470,7 @@ fn register_api(app: &mut App) {
             }
         },
         |w: &mut World, s: PlayerSave| {
-            if !s.body.pos.is_finite() || !s.body.vel.is_finite() || !s.body.yaw.is_finite() {
+            if !s.body.pos.is_finite() || !s.body.vel.is_finite() || !s.body.v.is_finite() || !s.body.yaw.is_finite() || !s.body.step_dy.is_finite() {
                 return Err("corrupt player state".to_string());
             }
             let mut q = w.query_filtered::<(Entity, &Id), With<Player>>();
@@ -392,6 +514,10 @@ mod tests {
         [move_x, move_y, 0.0, 0.0, buttons as f32, yaw, 0.0, 1.0]
     }
 
+    fn count_events(s: &mut Sim, kind: sim_core::EventKind) -> usize {
+        s.drain_events().chunks(7).filter(|e| e[0] == f32::from(kind.0)).count()
+    }
+
     #[test]
     fn spawns_one_player_and_publishes_before_the_first_step() {
         let s = sim();
@@ -422,29 +548,37 @@ mod tests {
     }
 
     #[test]
-    fn jump_button_jumps_once_per_press_and_emits_events() {
+    fn jump_button_jumps_and_holding_it_repeats_after_the_cooldown() {
         let mut s = sim();
+        let ground = player_rec(&s)[1];
         s.drain_events();
+        // one tap: exactly one jump and one landing
         s.set_input(&input(0.0, 0.0, buttons::JUMP, 0.0));
         s.tick(1.0 / 60.0);
-        assert!(player_rec(&s)[1] > s.world().resource::<SpawnPoints>().player.y - 5.0);
-        // keep holding jump: no second jump until released and pressed again
+        assert!(player_rec(&s)[1] > ground, "jump must start on the very next step");
         let mut max_y = f32::MIN;
-        let mut jumps = 0;
-        let mut lands = 0;
-        let held = input(0.0, 0.0, buttons::JUMP, 0.0);
+        let free = input(0.0, 0.0, 0, 0.0);
         for _ in 0..120 {
-            s.set_input(&held);
+            s.set_input(&free);
             s.tick(1.0 / 60.0);
             max_y = max_y.max(player_rec(&s)[1]);
         }
-        for e in s.drain_events().chunks(7) {
-            jumps += usize::from(e[0] == f32::from(events::JUMP.0));
-            lands += usize::from(e[0] == f32::from(events::LAND.0));
+        let ev = s.drain_events();
+        let jumps = ev.chunks(7).filter(|e| e[0] == f32::from(events::JUMP.0)).count();
+        let lands = ev.chunks(7).filter(|e| e[0] == f32::from(events::LAND.0)).count();
+        assert_eq!((jumps, lands), (1, 1), "one jump, one landing");
+        assert!(max_y > ground + 1.1, "apex {} above {}", max_y, ground);
+
+        // holding the key jumps again as soon as the 10-tick cooldown and the landing allow (every 12 ticks)
+        let mut s = sim();
+        s.drain_events();
+        let held = input(0.0, 0.0, buttons::JUMP, 0.0);
+        for _ in 0..150 {
+            s.set_input(&held);
+            s.tick(1.0 / 60.0);
         }
-        assert_eq!(jumps, 1, "held jump must not retrigger");
-        assert_eq!(lands, 1);
-        assert!(max_y > 1.0);
+        let jumps = count_events(&mut s, events::JUMP);
+        assert!((3..=6).contains(&jumps), "held jump repeats: {jumps} jumps in 2.5 s");
     }
 
     #[test]
@@ -484,6 +618,22 @@ mod tests {
         // out-of-bounds positions are clamped to the playable area
         let r: Value = serde_json::from_str(&s.command("debug.teleport", r#"{"x":99999,"z":0}"#)).unwrap();
         assert!(r["x"].as_f64().unwrap() <= 1024.0);
+    }
+
+    #[test]
+    fn tuning_query_and_command_roundtrip() {
+        let mut s = sim();
+        let t: Value = serde_json::from_str(&s.query("player.tuning", "")).unwrap();
+        let fields = t["fields"].as_array().unwrap();
+        assert!(fields.len() > 25 && fields.iter().any(|f| f["key"] == "gravity"));
+        assert!((t["walk_speed"].as_f64().unwrap() - 4.317).abs() < 0.01);
+        assert!(s.command("player.tune", r#"{"key":"gravity","value":0.12}"#).contains("gravity"));
+        assert!(s.command("player.tune", r#"{"key":"nope","value":1}"#).contains("unknown tuning key"));
+        let t: Value = serde_json::from_str(&s.query("player.tuning", "")).unwrap();
+        let g = t["fields"].as_array().unwrap().iter().find(|f| f["key"] == "gravity").unwrap()["value"].as_f64().unwrap();
+        assert!((g - 0.12).abs() < 1e-6);
+        s.command("player.tune_reset", "");
+        assert_eq!(s.world().resource::<PlayerTuning>().gravity, PlayerTuning::default().gravity);
     }
 
     #[test]
