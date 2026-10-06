@@ -1,0 +1,29 @@
+{
+  "module": "voxel",
+  "round": 3,
+  "scores": {"1": 6, "2": 6, "3": 6, "4": 5, "5": 3, "6": 6, "7": 6, "8": 5, "9": 9},
+  "pass": false,
+  "top_defects": [
+    "Shape language still generated: hollow arch olive trees, zig-zag 1-voxel path, elliptical pond with uniform rim, four cloned prop-less cottages, stair-step shorelines (08, 10, 02, A, B). Fix: 3-layer rounded oak, meandering 2-3 wide path, >=3 cottage variants with chimney/porch/fence/lantern props, noise-warped pond.",
+    "Sand (blurry scribbled tile) and dirt (dark maroon, same crack on every face) are still the weakest, largest surfaces; lawn tile edges show at grazing angles; bark has diagonal wrap seams (03, 13, 06b, 07, 14). Fix: repaint sand/dirt with 4-6 non-mirrored rotated variants, warm umber dirt, world-space macro noise, drop indigo strata.",
+    "Nothing moves: 8-frame strip shows identical canopy, shore and clouds; no leaf sway, foam, grass motion, particles (F strip). Fix: vertex sway on leaves/grass, depth-based foam band, drifting leaves/petals, butterflies, chimney smoke.",
+    "Time-of-day extremes still flat: 18:30 violet wash with no sun disc/key on ground, 23:00 flat teal ground with no moon or window bloom, hard sea/sky line and flat blue ocean in overview, acid-green lawn (A, 11, 12, D, 01).",
+    "Water/edge polish: white-hot slivers at stream cut, stripey ripple aliasing at grazing angles, no foam line, flat ocean, rectangular world edge from top camera (08, 11, 01, 02)."
+  ],
+  "round2_defect_status": {
+    "close_up_textures": "partly fixed (bark, pine, plaster, roof crisp; sand and dirt not fixed; lawn tile edges visible)",
+    "lighting_haze_night": "partly fixed (warm key, cool shadows, haze tint, fireflies; flat evening wash, no moon/bloom)",
+    "palette": "partly fixed (pond banks warm brown; cliff dirt maroon and indigo strata remain)",
+    "shapes": "not fixed",
+    "water_shoreline": "partly fixed (seam and moire rings gone, wet-sand band; no foam, white slivers remain)"
+  },
+  "plateau": true,
+  "plateau_note": "Texture/palette family has been top-3 for rounds 1-3 (sand, dirt, tiling); lighting persisted as a partly-fixed family. Shapes were never addressed. Escalate to a hand-painted/generated atlas for sand+dirt and spend next round on structure generators and motion.",
+  "evidence": {
+    "pack": "shots/voxel/r12/",
+    "own_shots": "shots/voxel/critic-r3/",
+    "stats": {"drawCalls_max": 206, "triangles_max": 710127, "gpuMs": 6.39, "consoleErrors": 0, "pageErrors": 0},
+    "blind_ab": "no refs (reference/ empty)",
+    "not_viewed": ["04", "05", "06", "09", "15", "16"]
+  }
+}
