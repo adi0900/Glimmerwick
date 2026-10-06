@@ -2,27 +2,26 @@
  * `_slice` -- PLACEHOLDER reference slice (order 50). NOT part of the final game: it exists so the engine, the
  * bridge (real wasm or mock), the galleries and the screenshot tools can be exercised end-to-end from day one.
  *
- * It renders whatever the bridge provides: instanced flora from the
- * `flora` channel, interpolated creatures and the player (mouse-look + WASD are the engine Input; the third-person
- * follow camera now lives in `modules/camera`, which also owns the F4 movement + camera panel).
+ * It renders whatever the bridge provides: instanced flora from the `flora` channel and the player avatar (the
+ * micro-voxel explorer from `modules/player/model.ts`; mouse-look + WASD are the engine Input; the third-person
+ * follow camera lives in `modules/camera`, which also owns the F4 movement + camera panel).
+ * The `creatures` channel is rendered by the `creatures` module (voxel actors) -- the smooth placeholders are gone.
  * Sun / sky / fog / shadows come from the engine's Lighting (driven by the `time` channel).
  *
- * Delete this folder when the real world / flora / creatures / characters modules take over
+ * Delete this folder when the real world / flora / characters modules take over
  * (or run `/?view=game&without=_slice`).
  */
 import { Object3D } from 'three';
 import type { Ctx, GameModule } from '../../engine/types';
 import { defineModule } from '../../engine/types';
-import { buildCreatures, type CreatureSystem } from './creatures';
+import { VoxelAvatar } from '../player/model';
 import { buildFlora, type FloraSystem } from './flora';
-import { PlayerAvatar } from './player';
 import { deriveCams, spawnXZ } from './cams';
 
 interface State {
   root: Object3D;
   flora: FloraSystem | null;
-  creatures: CreatureSystem | null;
-  player: PlayerAvatar;
+  player: VoxelAvatar;
   worldVer: number;
   floraVer: number;
 }
@@ -54,8 +53,7 @@ const mod: GameModule = defineModule({
     S = {
       root,
       flora: null,
-      creatures: null,
-      player: new PlayerAvatar(ctx.mats),
+      player: new VoxelAvatar(ctx, 'player'),
       worldVer: -1,
       floraVer: -1,
     };
@@ -63,10 +61,6 @@ const mod: GameModule = defineModule({
     S.worldVer = ctx.game.world.version;
     rebuildFlora(ctx, S);
     S.floraVer = ctx.game.has('flora') ? ctx.game.channel('flora').ver : 0;
-    if (ctx.game.has('creatures')) {
-      S.creatures = buildCreatures(ctx.game.channel('creatures'), ctx.mats);
-      root.add(S.creatures.group);
-    }
     ctx.debug.line('slice', () => `flora ${S?.flora?.count ?? 0} · world v${S?.worldVer ?? '-'}`);
   },
 
@@ -84,7 +78,6 @@ const mod: GameModule = defineModule({
     const p = ctx.game.player;
     s.player.update(p, dt, world.seaLevel);
     if (p.valid) ctx.bend(p.pos.x, p.pos.y, p.pos.z, 1.1);
-    s.creatures?.update(ctx.clock.alpha, ctx.bend);
   },
 
   gallery: {
@@ -107,7 +100,6 @@ const mod: GameModule = defineModule({
   dispose() {
     if (!S) return;
     S.flora?.dispose();
-    S.creatures?.dispose();
     S.player.dispose();
     S.root.parent?.remove(S.root);
     S = null;
