@@ -120,6 +120,19 @@ class Img {
   stroke(x: number, y: number, ang: number, len: number, c: RGB, a = 0.6): void {
     for (let t = 0; t <= len; t += 0.5) this.px(x + Math.cos(ang) * t, y + Math.sin(ang) * t, c, a);
   }
+  /** translates the (periodic) painting by (dx, dy) px and scales brightness: a cheap seamless variant */
+  roll(dx: number, dy: number, gain: number): void {
+    const src = this.d.slice();
+    for (let y = 0; y < S; y++) {
+      for (let x = 0; x < S; x++) {
+        const k = (wrap(y - dy, S) * S + wrap(x - dx, S)) * 3;
+        const o = (y * S + x) * 3;
+        this.d[o] = src[k]! * gain;
+        this.d[o + 1] = src[k + 1]! * gain;
+        this.d[o + 2] = src[k + 2]! * gain;
+      }
+    }
+  }
   rgba(): Uint8ClampedArray {
     const out = new Uint8ClampedArray(S * S * 4);
     for (let y = 0; y < S; y++) {
@@ -142,7 +155,7 @@ const MEADOW = ['#3FA65A', '#5CC95A', '#8FDB62', '#C6E86A'].map(hx) as RGB[];
 const FOREST = ['#2A7F55', '#3E9E5E', '#63B867', '#9AD477'].map(hx) as RGB[];
 const HIGH = ['#86B055', '#B0D066', '#D2DE66', '#EAF08A'].map(hx) as RGB[];
 
-function dirtFill(im: Img, s = 1, base = hx('#8B5A36'), dark = hx('#6A4126'), light = hx('#A8703F')): void {
+function dirtFill(im: Img, s = 1, base = hx('#A58250'), dark = hx('#866438'), light = hx('#C8A468')): void {
   im.fill((u, v) => {
     const n = fbm(u, v, 4, 3, s);
     const c = mixc(mixc(dark, base, sstep(0.25, 0.6, n)), light, sstep(0.6, 0.85, fbm(u, v, 9, 2, s + 4)) * 0.7);
@@ -313,8 +326,8 @@ const PAINT: Record<string, (im: Img) => void> = {
       return scale(c, 0.97 + 0.06 * rnd(u * S, v * S, 93));
     });
   },
-  log_oak_side: (im) => bark(im, hx('#7A4A2B'), hx('#96623B'), hx('#4F2F1B'), 101),
-  log_pine_side: (im) => bark(im, hx('#8A5238'), hx('#A86A48'), hx('#573225'), 102),
+  log_oak_side: (im) => bark(im, hx('#8E6C40'), hx('#AD8852'), hx('#5E4527'), 101),
+  log_pine_side: (im) => bark(im, hx('#9A7048'), hx('#B98C5C'), hx('#634932'), 102),
   log_birch_side: (im) => {
     im.fill((u, v) => scale(mixc(hx('#E8E0D0'), hx('#F7F2E8'), vn(u, v, 6, 111)), 0.97 + 0.06 * rnd(u * S, v * S, 112)));
     for (let k = 0; k < 15; k++) {
@@ -336,7 +349,7 @@ const PAINT: Record<string, (im: Img) => void> = {
   leaves_pine: (im) => leaves(im, ['#1F5F4A', '#2F8A66', '#5DB88A', '#9AE0B4'].map(hx), 132, undefined, true),
   leaves_blossom: (im) => leaves(im, ['#E0699A', '#FF8FBE', '#FFC2DA', '#FFF0F6'].map(hx), 133, { c: hx('#FFF7F0'), n: 12, r: 1.7 }),
   leaves_birch: (im) => leaves(im, ['#78A83A', '#A5D14E', '#CDE86A', '#EAF59A'].map(hx), 134),
-  leaves_maple: (im) => leaves(im, ['#B8381F', '#E2602C', '#F59A3A', '#FFD27A'].map(hx), 135),
+  leaves_maple: (im) => leaves(im, ['#A8402A', '#CC6A34', '#E6933F', '#F6C677'].map(hx), 135),
   leaves_palm: (im) => leaves(im, ['#2E8F4C', '#4DB85A', '#86DB78', '#C8F4A0'].map(hx), 136, undefined, true),
   leaves_willow: (im) => leaves(im, ['#5E9A44', '#86BE5A', '#B0DC7C', '#D8F2A4'].map(hx), 137, undefined, true),
   leaves_berry: (im) => leaves(im, ['#2D7A45', '#4DB85A', '#8FDC6A', '#C8F08A'].map(hx), 138, { c: hx('#E0394A'), n: 9, r: 2 }),
@@ -424,23 +437,43 @@ function fallback(name: string): (im: Img) => void {
   return (im) => im.fill((u, v) => scale(base, 0.9 + 0.2 * fbm(u, v, 4, 3, h & 255)));
 }
 
+/** tiles that get hash-picked variants (rolled copies of the painting; the shader also flips / rotates per block) */
+const VARIANTS: Record<string, number> = {
+  grass_top: 4, grass_forest_top: 4, grass_high_top: 4, grass_flower_top: 4, sand: 4, dirt: 3,
+  grass_side: 2, grass_forest_side: 2, grass_high_side: 2, stone_cool: 2, stone_warm: 2, stone_dark: 2, gravel: 2, path_top: 2, packed_top: 2,
+};
+
 export interface Atlas {
   texture: DataArrayTexture;
+  /** first layer of each tile */
   index: Map<string, number>;
+  /** number of consecutive variant layers of each tile */
+  variants: Map<string, number>;
   names: string[];
+  layers: number;
 }
 
-/** paints `names` (index = array layer) into one sRGB texture array */
+/** paints `names` (+ variants; layer = running offset) into one sRGB texture array */
 export function buildAtlas(names: string[], maxAnisotropy = 8): Atlas {
-  const data = new Uint8Array(S * S * 4 * names.length);
+  let layers = 0;
+  for (const n of names) layers += VARIANTS[n] ?? 1;
+  const data = new Uint8Array(S * S * 4 * layers);
   const index = new Map<string, number>();
-  names.forEach((name, i) => {
-    index.set(name, i);
-    const im = new Img();
-    (PAINT[name] ?? fallback(name))(im);
-    data.set(im.rgba(), i * S * S * 4);
-  });
-  const texture = new DataArrayTexture(data, S, S, names.length);
+  const variants = new Map<string, number>();
+  let layer = 0;
+  for (const name of names) {
+    const nv = VARIANTS[name] ?? 1;
+    index.set(name, layer);
+    variants.set(name, nv);
+    for (let v = 0; v < nv; v++) {
+      const im = new Img();
+      (PAINT[name] ?? fallback(name))(im);
+      if (v > 0) im.roll(Math.floor(rnd(v, 1, 777 + name.length) * S), name.includes('side') ? 0 : Math.floor(rnd(v, 2, 779 + name.length) * S), 0.96 + 0.08 * rnd(v, 3, 5));
+      data.set(im.rgba(), layer * S * S * 4);
+      layer++;
+    }
+  }
+  const texture = new DataArrayTexture(data, S, S, layers);
   texture.format = RGBAFormat;
   texture.type = UnsignedByteType;
   texture.colorSpace = SRGBColorSpace;
@@ -451,5 +484,5 @@ export function buildAtlas(names: string[], maxAnisotropy = 8): Atlas {
   texture.anisotropy = maxAnisotropy;
   texture.needsUpdate = true;
   texture.name = 'voxel.tiles';
-  return { texture, index, names };
+  return { texture, index, variants, names, layers };
 }

@@ -27,6 +27,8 @@ pub mod flag {
     pub const GLOW: u8 = 16;
     /// vegetation (logs, leaves, mushrooms): solid for collision but not "ground" for `HeightQuery`
     pub const PLANT: u8 = 32;
+    /// emissive only at night (lit windows)
+    pub const NIGHT_GLOW: u8 = 64;
 }
 
 /// Block ids.
@@ -134,7 +136,7 @@ pub static BLOCKS: [BlockDef; id::COUNT as usize] = [
     b(34, "cobble", SOLID_OPAQUE, 1.5, 34, ["cobble", "cobble", "cobble"], [157, 149, 171]),
     b(35, "plaster", SOLID_OPAQUE, 1.0, 35, ["plaster", "plaster", "plaster"], [255, 243, 224]),
     b(36, "roof_tile", SOLID_OPAQUE, 1.0, 36, ["roof_tile", "roof_tile", "roof_tile"], [226, 103, 74]),
-    b(37, "glass", SOLID_OPAQUE, 0.3, 0, ["glass", "glass", "glass"], [191, 233, 245]),
+    b(37, "glass", SOLID_OPAQUE | flag::NIGHT_GLOW, 0.3, 0, ["glass", "glass", "glass"], [191, 233, 245]),
     b(38, "lantern", SOLID_OPAQUE | GL, 0.3, 38, ["lantern", "lantern", "lantern"], [255, 210, 122]),
     b(39, "bedrock", SOLID_OPAQUE, -1.0, 0, ["stone_dark", "stone_dark", "stone_dark"], [60, 50, 70]),
 ];
@@ -172,7 +174,7 @@ pub fn registry_json() -> Value {
             json!({
                 "id": d.id, "name": d.name, "solid": d.flags & flag::SOLID != 0, "opaque": d.flags & flag::OPAQUE != 0,
                 "liquid": d.flags & flag::LIQUID != 0, "foliage": d.flags & flag::FOLIAGE != 0, "glow": d.flags & flag::GLOW != 0,
-                "plant": d.flags & flag::PLANT != 0, "hardness": d.hardness, "drop": d.drop, "tex": d.tex, "color": d.color,
+                "plant": d.flags & flag::PLANT != 0, "night_glow": d.flags & flag::NIGHT_GLOW != 0, "hardness": d.hardness, "drop": d.drop, "tex": d.tex, "color": d.color,
             })
         })
         .collect();

@@ -4,9 +4,10 @@
  * version -> remesh of only its region), the ripple API and the gallery debug tool (click = break, right-click = place,
  * 1-9 = block; `?voxdemo=1` scripts an edit filmstrip). Replaces the smooth `world` module.
  */
-import { Box3, BufferAttribute, BufferGeometry, Group, Mesh, Sphere, Vector3 } from 'three';
+import { Box3, BufferAttribute, BufferGeometry, DataTexture, Group, Mesh, NearestFilter, RGBAFormat, Sphere, SRGBColorSpace, UnsignedByteType, Vector3, type Vector4 } from 'three';
 import type { Ctx, GalleryCam } from '../../engine/types';
 import { defineModule } from '../../engine/types';
+import { lookState } from '../../engine/Lighting';
 import { buildAtlas } from './atlas';
 import { makeBlockMaterial, makeWaterMaterial, type BlockMaterial, type WaterMaterial } from './materials';
 import { Mesher, REGION, type SolidMesh, type VoxInfo, type WaterMesh } from './mesher';
@@ -20,6 +21,7 @@ interface BlockDef {
   foliage: boolean;
   glow: boolean;
   plant: boolean;
+  night_glow?: boolean;
   tex: [string, string, string];
 }
 
@@ -51,6 +53,7 @@ interface State {
 }
 
 let S: State | null = null;
+const focusDir = new Vector3();
 const PALETTE = ['planks', 'cobble', 'plaster', 'roof_tile', 'lantern', 'sand', 'stone', 'glowcap', 'log_oak'];
 
 function chunkIds(s: State, r: Region): number[] {
@@ -131,34 +134,38 @@ function countTris(s: State): number {
 }
 
 function buildSeaRing(s: State, ctx: Ctx): Mesh {
+  // endless ocean: a 3 x 3 grid (centre = the voxel world) out to 6 km; the water depth continues the world's own sea
+  // (12 m at its border) and deepens away from it, so there is no visible edge; the haze (gwFog) melts it into the sky
   const i = s.info;
-  const x0 = i.originX;
-  const x1 = i.originX + i.nx;
-  const z0 = i.originZ;
-  const z1 = i.originZ + i.nz;
-  const B = 4000;
+  const B = 6000;
+  const xs = [i.originX - B, i.originX, i.originX + i.nx, i.originX + i.nx + B];
+  const zs = [i.originZ - B, i.originZ, i.originZ + i.nz, i.originZ + i.nz + B];
   const y = -0.12;
-  const quads: [number, number, number, number][] = [
-    [x0 - B, x1 + B, z0 - B, z0],
-    [x0 - B, x1 + B, z1, z1 + B],
-    [x0 - B, x0, z0, z1],
-    [x1, x1 + B, z0, z1],
-  ];
-  const pos = new Float32Array(quads.length * 12);
-  const aw = new Float32Array(quads.length * 8);
-  const idx = new Uint32Array(quads.length * 6);
-  quads.forEach(([xa, xb, za, zb], q) => {
-    const p = [xa, zb, xb, zb, xb, za, xa, za];
-    for (let c = 0; c < 4; c++) {
-      pos.set([p[c * 2]!, y, p[c * 2 + 1]!], q * 12 + c * 3);
-      aw.set([14, 0], q * 8 + c * 2);
+  const pos = new Float32Array(16 * 3);
+  const aw = new Float32Array(16 * 2);
+  for (let j = 0; j < 4; j++) {
+    for (let k = 0; k < 4; k++) {
+      const v = j * 4 + k;
+      pos.set([xs[k]!, y, zs[j]!], v * 3);
+      const out = Math.max(0, i.originX - xs[k]!, xs[k]! - (i.originX + i.nx), i.originZ - zs[j]!, zs[j]! - (i.originZ + i.nz));
+      aw.set([12 + 4 * Math.min(out / 300, 1), 0], v * 2);
     }
-    idx.set([q * 4, q * 4 + 1, q * 4 + 2, q * 4, q * 4 + 2, q * 4 + 3], q * 6);
-  });
+  }
+  const idx: number[] = [];
+  for (let j = 0; j < 3; j++) {
+    for (let k = 0; k < 3; k++) {
+      if (j === 1 && k === 1) continue;
+      const c0 = (j + 1) * 4 + k;
+      const c1 = (j + 1) * 4 + k + 1;
+      const c2 = j * 4 + k + 1;
+      const c3 = j * 4 + k;
+      idx.push(c0, c1, c2, c0, c2, c3);
+    }
+  }
   const g = new BufferGeometry();
   g.setAttribute('position', new BufferAttribute(pos, 3));
   g.setAttribute('aWater', new BufferAttribute(aw, 2));
-  g.setIndex(new BufferAttribute(idx, 1));
+  g.setIndex(new BufferAttribute(new Uint32Array(idx), 1));
   const m = new Mesh(g, s.water.material);
   m.frustumCulled = false;
   m.renderOrder = 4;
@@ -175,6 +182,66 @@ function buildAll(ctx: Ctx, s: State): void {
 }
 
 // ------------------------------------------------------------------------------------------------- edit tool
+
+// ------------------------------------------------------------------------------------------------- water reflections
+
+interface RefState {
+  data: Uint8Array;
+  tex: DataTexture;
+  rgb: Uint8Array;
+  waterId: number;
+}
+let REF: RefState | null = null;
+
+/** top-block colour + height per column (352 x 288 texels): the water shader marches reflected rays over it */
+function initRef(ctx: Ctx, s: State, blocks: { id: number; color: number[] }[], waterId: number): void {
+  const rgb = new Uint8Array(256 * 3);
+  for (const b of blocks) rgb.set(b.color.slice(0, 3), b.id * 3);
+  const data = new Uint8Array(s.info.nx * s.info.nz * 4);
+  const tex = new DataTexture(data, s.info.nx, s.info.nz, RGBAFormat, UnsignedByteType);
+  tex.colorSpace = SRGBColorSpace;
+  tex.magFilter = tex.minFilter = NearestFilter;
+  tex.generateMipmaps = false;
+  tex.name = 'voxel.reflect';
+  REF = { data, tex, rgb, waterId };
+  const u = s.water.material.uniforms;
+  u.uRefTex!.value = tex;
+  (u.uRefInfo!.value as Vector4).set(s.info.originX, s.info.originZ, s.info.nx, s.info.nz);
+  u.uRefSea!.value = s.info.seaY;
+  updateRef(ctx, s);
+}
+
+function updateRef(ctx: Ctx, s: State): void {
+  if (!REF) return;
+  const { nx, nz, ny, ncx, chunk, seaY } = s.info;
+  const cells = chunk * chunk * ny;
+  const blocks = ctx.game.channel<Uint16Array>('vox.data').data;
+  const chunks = ctx.game.channel<Uint32Array>('vox.chunks').data;
+  const { data, rgb, waterId } = REF;
+  for (let z = 0; z < nz; z++) {
+    for (let x = 0; x < nx; x++) {
+      const ci = (z >> 4) * ncx + (x >> 4);
+      const base = ci * cells + (((z & 15) << 4) + (x & 15)) * ny;
+      let y = Math.min(ny - 1, chunks[ci * 2 + 1]!);
+      while (y > 0) {
+        const b = blocks[base + y]!;
+        if (b !== 0 && b !== waterId) break;
+        y--;
+      }
+      const b = blocks[base + y]!;
+      const o = (z * nx + x) * 4;
+      if (y + 1 - seaY < 1) {
+        data[o] = data[o + 1] = data[o + 2] = data[o + 3] = 0; // sea floor / waterline: never occludes
+      } else {
+        data[o] = rgb[b * 3]!;
+        data[o + 1] = rgb[b * 3 + 1]!;
+        data[o + 2] = rgb[b * 3 + 2]!;
+        data[o + 3] = Math.min(255, (y + 1) * 4);
+      }
+    }
+  }
+  REF.tex.needsUpdate = true;
+}
 
 function blockId(s: State, name: string): number {
   return s.blocks.find((b) => b.name === name)?.id ?? 0;
@@ -276,7 +343,7 @@ function deriveCams(ctx: Ctx): Record<string, GalleryCam> {
   const streams = (info.water?.streams ?? []) as { pts: number[][] }[];
   const hl = (info.highland ?? [cx - 66, cz - 56, 70]) as number[];
   const cams: Record<string, GalleryCam> = {};
-  cams.overview = { pos: [cx - 60, 108, cz + 218], target: [cx + 6, 2, cz - 4], fov: 44 };
+  cams.overview = { pos: [cx - 55, 72, cz + 196], target: [cx + 6, 22, cz - 4], fov: 50 };
   cams.top = { pos: [cx, 330, cz + 1], target: [cx, 0, cz], fov: 42 };
   const out = streams[1]?.pts;
   if (out?.length) {
@@ -290,6 +357,7 @@ function deriveCams(ctx: Ctx): Record<string, GalleryCam> {
   const mpx = spawn[0] - pdir[0] * 3.5 - pdir[1] * 1.5;
   const mpz = spawn[1] - pdir[1] * 3.5 + pdir[0] * 1.5;
   cams.meadow = { pos: [mpx, gy(mpx, mpz) + 1.7, mpz], target: [spawn[0] + pdir[0] * 9, gy(spawn[0] + pdir[0] * 9, spawn[1] + pdir[1] * 9) + 0.9, spawn[1] + pdir[1] * 9], fov: 52 };
+  cams.lawn = { pos: [spawn[0] + 2.4, gy(spawn[0], spawn[1]) + 2.3, spawn[1] + 3.4], target: [spawn[0] - 2.5, gy(spawn[0], spawn[1]) + 0.2, spawn[1] - 2], fov: 42 };
   if (pond) cams.pond = { pos: [pond.x - 30, pond.level + 5.5, pond.z + 24], target: [pond.x + 2, pond.level - 0.4, pond.z - 2], fov: 50 };
   if (streams[1]?.pts.length) {
     const p = streams[1].pts;
@@ -341,9 +409,13 @@ const mod = defineModule({
     const atlas = buildAtlas(names, Math.min(8, ctx.renderer.capabilities.getMaxAnisotropy()));
     const flags = new Uint8Array(256);
     const tiles = new Uint16Array(256 * 3);
+    const tileVar = new Uint8Array(256 * 3);
     for (const b of blocks) {
-      flags[b.id] = (b.solid ? 1 : 0) | (b.opaque ? 2 : 0) | (b.liquid ? 4 : 0) | (b.foliage ? 8 : 0) | (b.glow ? 16 : 0) | (b.plant ? 32 : 0);
-      b.tex.forEach((n, k) => (tiles[b.id * 3 + k] = n ? atlas.index.get(n) ?? 0 : 0));
+      flags[b.id] = (b.solid ? 1 : 0) | (b.opaque ? 2 : 0) | (b.liquid ? 4 : 0) | (b.foliage ? 8 : 0) | (b.glow ? 16 : 0) | (b.plant ? 32 : 0) | (b.night_glow ? 64 : 0);
+      b.tex.forEach((n, k) => {
+        tiles[b.id * 3 + k] = n ? atlas.index.get(n) ?? 0 : 0;
+        tileVar[b.id * 3 + k] = n ? atlas.variants.get(n) ?? 1 : 1;
+      });
     }
     const waterId = blocks.find((b) => b.liquid)?.id ?? 16;
     const root = new Group();
@@ -358,7 +430,7 @@ const mod = defineModule({
     S = {
       root,
       info,
-      mesher: new Mesher(info, flags, tiles, waterId),
+      mesher: new Mesher(info, flags, tiles, tileVar, waterId),
       regions,
       rw,
       rh,
@@ -376,6 +448,7 @@ const mod = defineModule({
     S.ring = buildSeaRing(S, ctx);
     root.add(S.ring);
     buildAll(ctx, S);
+    initRef(ctx, S, blocks as unknown as { id: number; color: number[] }[], waterId);
     ctx.uniforms.uWorldSize.value.set(info.nx, info.nz, info.originX, info.originZ);
     const s = S;
     const api = {
@@ -405,6 +478,13 @@ const mod = defineModule({
     const s = S;
     if (!s) return;
     s.block.vox.w = ctx.uniforms.uTime.value as number;
+    {
+      // DOF focus = distance to what the camera looks at (exact voxel hit, not the flat-ground guess); Lighting.follow reads it
+      const o = ctx.camera.position;
+      const d = ctx.camera.getWorldDirection(focusDir);
+      const hit = ctx.game.query('world.raycast', { origin: [o.x, o.y, o.z], dir: [d.x, d.y, d.z], max: 600, liquids: true });
+      lookState.hint = hit?.hit ? (hit.dist as number) : 0;
+    }
     const dv = ctx.game.channel('vox.data').ver;
     const chunks = ctx.game.channel<Uint32Array>('vox.chunks').data;
     let budget = 6;
@@ -423,6 +503,7 @@ const mod = defineModule({
       budget--;
     }
     if (worst > 0) {
+      updateRef(ctx, s);
       s.stats.lastRemeshMs = worst;
       s.stats.tris = countTris(s);
       if (s.pendingEditAt > 0) {

@@ -51,6 +51,8 @@ export const lookState = {
   sunElev: 1,
   /** camera-space distance (m) that depth of field keeps razor sharp (smoothed) */
   focus: 14,
+  /** external focus hint (m), e.g. the voxel module's view-ray hit distance; 0 = none */
+  hint: 0,
   grey: 0,
 };
 
@@ -367,7 +369,7 @@ export class Lighting {
     nightSun: 2.3,
     nightHemi: 2.2,
     /** the art-bible fog densities assume a tighter scene; this scales them for a 300 m island */
-    fogScale: 0.24,
+    fogScale: 0.09,
     /** peak strength of the drifting cloud shadows on the ground (0 = off) */
     cloudShadow: 0.34,
   };
@@ -661,6 +663,7 @@ export class Lighting {
     const along = toP.dot(fwd);
     let target: number;
     if (dist < 140 && along > 0.5 && along / Math.max(dist, 1e-3) > 0.9) target = along;
+    else if (lookState.hint > 0) target = Math.min(600, Math.max(2, lookState.hint));
     else if (fwd.y < -0.03) target = Math.min(400, Math.max(6, (camera.position.y - 0.5) / -fwd.y));
     else target = 60;
     const a = this.lastSnap ? 1 : 1 - Math.exp(-5 * Math.max(this.lastDt, 1 / 120));

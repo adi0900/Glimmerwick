@@ -85,6 +85,8 @@ export class Mesher {
     private readonly flags: Uint8Array,
     /** [block * 3 + (0 top | 1 side | 2 bottom)] -> atlas layer */
     private readonly tiles: Uint16Array,
+    /** variants per [block * 3 + face] tile: the shader picks layer tile + hash % n */
+    private readonly tileVar: Uint8Array,
     private readonly waterId: number,
   ) {
     const ny = info.ny;
@@ -131,6 +133,7 @@ export class Mesher {
   /** Meshes region `(rx, rz)`; returns null meshes where nothing is visible. */
   meshRegion(blocks: Uint16Array, chunks: Uint32Array, rx: number, rz: number): { solid: SolidMesh | null; water: WaterMesh | null } {
     const { info, flags, tiles, opq, col, light, wtop, wdep, dN, dT, dB } = this;
+    const tileVar = this.tileVar;
     const ny = info.ny;
     const cells = info.chunk * info.chunk * ny;
     const x0 = rx * R;
@@ -179,12 +182,22 @@ export class Mesher {
           const fl = flags[b]!;
           if (fl & FL.OPAQUE) {
             const sway = fl & FL.FOLIAGE ? 255 : 0;
-            const glow = fl & FL.GLOW ? 255 : 0;
+            const glow = fl & FL.GLOW ? 255 : fl & 64 ? 128 : 0;
             for (let f = 0; f < 6; f++) {
               if (f === 3 && y === 0) continue;
               const front = base + y + dN[f]!;
               if (opq[col[front]!]) continue;
-              this.solidQuad(f, cx, y, cz, front, tiles[b * 3 + (f === 2 ? 0 : f === 3 ? 2 : 1)]!, sway, glow);
+              const tk = b * 3 + (f === 2 ? 0 : f === 3 ? 2 : 1);
+              // bevel bits: 1..8 = real edge (the neighbour in the face plane is open space), 16..128 = coplanar neighbour
+              // (walls only: faint seam; flat tops get none, so lawns and beaches have no grid)
+              const c0 = base + y;
+              let bits = 0;
+              if (!opq[col[c0 - dT[f]!]!]) bits |= 1;
+              if (!opq[col[c0 + dT[f]!]!]) bits |= 2;
+              if (!opq[col[c0 - dB[f]!]!]) bits |= 4;
+              if (!opq[col[c0 + dB[f]!]!]) bits |= 8;
+              if (f !== 2 && f !== 3) bits |= (~bits & 15) << 4;
+              this.solidQuad(f, cx, y, cz, front, tiles[tk]!, tileVar[tk]!, sway, glow, bits);
             }
           } else if (fl & FL.LIQUID) {
             const above = col[base + y + 1]!;
@@ -214,7 +227,7 @@ export class Mesher {
     return { solid, water };
   }
 
-  private solidQuad(f: number, cx: number, y: number, cz: number, front: number, tile: number, sway: number, glow: number): void {
+  private solidQuad(f: number, cx: number, y: number, cz: number, front: number, tile: number, nvar: number, sway: number, glow: number, bits: number): void {
     if (this.nv + 4 > this.cap) this.growSolid();
     const { col, light, opq, dT, dB } = this;
     const N = FN[f]!;
@@ -260,11 +273,11 @@ export class Mesher {
       this.nrm[i * 3] = N[0]! * 127;
       this.nrm[i * 3 + 1] = N[1]! * 127;
       this.nrm[i * 3 + 2] = N[2]! * 127;
-      this.tf[i] = tile * 8 + f;
+      this.tf[i] = (nvar << 11) | (tile << 3) | f;
       this.lt[i * 4] = (a * 255) / 3;
       this.lt[i * 4 + 1] = ls / ln;
       this.lt[i * 4 + 2] = glow;
-      this.lt[i * 4 + 3] = 255;
+      this.lt[i * 4 + 3] = bits;
       this.sw[i] = sway;
     }
     const flip = ao[0]! + ao[2]! > ao[1]! + ao[3]!;
@@ -321,7 +334,8 @@ export class Mesher {
       const a = Z * P + X;
       const dep = (wdep[a]! + wdep[a + 1]! + wdep[a + P]! + wdep[a + P + 1]!) / 4;
       const wet = (wtop[a]! >= 0 ? 1 : 0) + (wtop[a + 1]! >= 0 ? 1 : 0) + (wtop[a + P]! >= 0 ? 1 : 0) + (wtop[a + P + 1]! >= 0 ? 1 : 0);
-      this.waterVert(this.wnv + c, X, y + 1 - WATER_DROP, Z, dep, 1 - wet / 4);
+      // region borders overlap by 1 cm so the translucent sheets leave no hairline cracks
+      this.waterVert(this.wnv + c, X + (X === 0 ? -0.01 : X === R ? 0.01 : 0), y + 1 - WATER_DROP, Z + (Z === 0 ? -0.01 : Z === R ? 0.01 : 0), dep, 1 - wet / 4);
     }
     this.waterIdx();
   }
@@ -334,7 +348,7 @@ export class Mesher {
     for (let c = 0; c < 4; c++) {
       const u = CU[c]!;
       const v = CV[c]!;
-      this.waterVert(this.wnv + c, cx + bs[0]! + u * T[0]!, y + v * h, cz + bs[2]! + u * T[2]!, 0.3 + (1 - v) * 0.3, 0.7);
+      this.waterVert(this.wnv + c, cx + bs[0]! + u * T[0]!, y + v * h, cz + bs[2]! + u * T[2]!, 0.5 + (1 - v) * 0.5, 0.3);
     }
     void B;
     this.waterIdx();

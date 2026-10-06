@@ -137,12 +137,14 @@ float gwDofLin(float d) {
 float gwDofCoc(vec2 uv, float d) {
   float z = gwDofLin(d);
   float f = max(uFocus, 1.0);
-  float farK = smoothstep(f * 1.6, f * 7.0 + 30.0, z);
+  float farK = smoothstep(max(f * 1.6, 16.0), f * 7.0 + 30.0, z);
   if (d >= 0.99999) farK *= 0.35;                       // keep sky and clouds soft but legible
-  float nearK = 1.0 - smoothstep(0.5, max(2.5, f * 0.3), z);
+  float nearK = (1.0 - smoothstep(0.4, clamp(f * 0.15, 1.5, 5.0), z)) * 0.8;   // only the very near foreground softens
   float depthC = max(farK * 0.65, nearK) * uDofStrength;
   float ty = abs(uv.y - 0.5 - uTiltOffset) * 2.0;       // 0 centre .. 1 edge
-  float tilt = smoothstep(uTiltArea, uTiltArea + uTiltFeather, ty) * uTiltStrength;
+  float area = mix(0.97, uTiltArea, smoothstep(6.0, 40.0, f));   // close focus: (almost) no tilt-shift band
+  float tilt = smoothstep(area, area + uTiltFeather, ty) * uTiltStrength;
+  if (d >= 0.99999) tilt *= 0.25;                          // keep the clouds crisp
   return clamp(max(depthC, tilt), 0.0, 1.0);
 }
 
@@ -517,8 +519,8 @@ export class Post {
     bloomSmoothing: 0.35,
     bloomRadius: 0.8,
     aoRadius: 0.9,
-    aoIntensity: 1.35,
-    aoStrength: 0.85,
+    aoIntensity: 1.0,
+    aoStrength: 0.55,
     /** tilt-shift band: fraction of the frame height kept crisp (centred), feather, offset, strength of the edge blur */
     tiltOffset: 0.0,
     tiltFocus: 0.62,

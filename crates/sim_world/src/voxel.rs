@@ -14,7 +14,7 @@
 
 use crate::biome;
 use crate::flora::FLORA_STRIDE;
-use crate::noise::value_noise;
+use crate::noise::{fbm_rot, value_noise};
 use crate::worldgen::Generated;
 use sim_core::blocks::{self, BLOCKS, BlockId, BlockSource, flag, id::*};
 use sim_core::math::{self, Vec3};
@@ -474,8 +474,8 @@ impl<'a> Gen<'a> {
                 }
                 let mut hh = s * 0.25;
                 let ed = ix.min(NX - 1 - ix).min(iz).min(NZ - 1 - iz) as f32;
-                if hh > -7.0 {
-                    hh = -7.0 + (hh + 7.0) * ss(1.0, 14.0, ed);
+                if hh > -12.0 {
+                    hh = -12.0 + (hh + 12.0) * ss(1.0, 30.0, ed);
                 }
                 let b = hf.biome_at(wx, wz);
                 hz[iz * NX + ix] = hh;
@@ -546,6 +546,71 @@ impl<'a> Gen<'a> {
                     }
                 }
             }
+        }
+    }
+
+    /// Organic sea floor: the depth grows steadily with the distance from the nearest land (no flat plateaus / discs),
+    /// plus low-frequency noise and sand bars; cliff coasts keep the design's deeper water.
+    fn bathymetry(&mut self) {
+        let n = NX * NZ;
+        let mut d = vec![i32::MAX / 2; n];
+        for c in 0..n {
+            if self.h[c] >= 0 {
+                d[c] = 0;
+            }
+        }
+        for iz in 0..NZ {
+            for ix in 0..NX {
+                let c = iz * NX + ix;
+                let mut v = d[c];
+                if ix > 0 {
+                    v = v.min(d[c - 1] + 3);
+                }
+                if iz > 0 {
+                    v = v.min(d[c - NX] + 3);
+                    if ix > 0 {
+                        v = v.min(d[c - NX - 1] + 4);
+                    }
+                    if ix + 1 < NX {
+                        v = v.min(d[c - NX + 1] + 4);
+                    }
+                }
+                d[c] = v;
+            }
+        }
+        for iz in (0..NZ).rev() {
+            for ix in (0..NX).rev() {
+                let c = iz * NX + ix;
+                let mut v = d[c];
+                if ix + 1 < NX {
+                    v = v.min(d[c + 1] + 3);
+                }
+                if iz + 1 < NZ {
+                    v = v.min(d[c + NX] + 3);
+                    if ix + 1 < NX {
+                        v = v.min(d[c + NX + 1] + 4);
+                    }
+                    if ix > 0 {
+                        v = v.min(d[c + NX - 1] + 4);
+                    }
+                }
+                d[c] = v;
+            }
+        }
+        for c in 0..n {
+            if self.h[c] >= 0 {
+                continue;
+            }
+            let (ix, iz) = (c % NX, c / NX);
+            let dist = d[c] as f32 / 3.0;
+            let lump = fbm_rot(self.seed ^ 0xB47, ix as f32 * 0.03, iz as f32 * 0.03, 3, 0.5);
+            let ridge = value_noise(self.seed ^ 0xB48, ix as f32 * 0.09, iz as f32 * 0.09);
+            let mut depth = 0.6 + 0.085 * dist.min(40.0) + 7.5 * ss(28.0, 120.0, dist);
+            depth += (lump - 0.5) * 2.4 * ss(3.0, 14.0, dist);
+            depth -= 1.4 * ss(0.62, 0.82, ridge) * (1.0 - ss(10.0, 34.0, dist));
+            let old = -self.h[c] as f32;
+            let depth = depth.max(old * 0.9).clamp(1.0, 12.0);
+            self.h[c] = -(depth.round() as i32);
         }
     }
 
@@ -968,38 +1033,43 @@ impl<'a> Gen<'a> {
         let mut leaves: Vec<(i32, i32, i32)> = Vec::new();
         match kind {
             0 | 1 | 3 | 5 | 6 | 7 | 10 | 11 => {
-                let (tmin, tvar, rx, ry, log, leaf) = match kind {
-                    0 => (3, 2.0, 3, 2, LOG_OAK, LEAVES_OAK),
-                    1 => (5, 3.0, 3, 3, LOG_OAK, LEAVES_OAK),
-                    3 => (3, 2.0, 3, 2, LOG_OAK, LEAVES_BLOSSOM),
-                    5 => (4, 2.0, 3, 3, LOG_OAK, LEAVES_WILLOW),
-                    6 => (5, 3.0, 2, 3, LOG_BIRCH, LEAVES_BIRCH),
-                    7 => (4, 2.0, 3, 3, LOG_OAK, LEAVES_MAPLE),
-                    10 => (3, 2.0, 3, 2, LOG_OAK, LEAVES_APPLE),
-                    _ => (3, 2.0, 3, 2, LOG_OAK, LEAVES_ORANGE),
+                // designed canopies (layered discs, one leaf palette per species); the trunk stays visible below the crown
+                let big = sc > 1.12 || hs(2) > 0.55;
+                let (tmin, tvar, log, leaf) = match kind {
+                    0 => (4, 2.0, LOG_OAK, LEAVES_OAK),
+                    1 => (6, 3.0, LOG_OAK, LEAVES_OAK),
+                    3 => (3, 2.0, LOG_OAK, LEAVES_BLOSSOM),
+                    5 => (4, 2.0, LOG_OAK, LEAVES_WILLOW),
+                    6 => (6, 3.0, LOG_BIRCH, LEAVES_BIRCH),
+                    7 => (5, 2.0, LOG_OAK, LEAVES_MAPLE),
+                    10 => (3, 2.0, LOG_OAK, LEAVES_APPLE),
+                    _ => (3, 2.0, LOG_OAK, LEAVES_ORANGE),
                 };
-                let th = tmin + (hs(1) * tvar * sc) as i32;
-                let rxs = ((rx as f32 * sc).round() as i32).max(2);
-                let rys = ((ry as f32 * sc).round() as i32).max(2);
+                let radii = canopy_radii(kind, big);
+                let th = tmin + (hs(1) * tvar) as i32;
                 for t in 1..=th {
                     self.put(ix, base + t, iz, log, true);
                     logs.push((ix, base + t, iz));
                 }
-                let cy = base + th + 1;
-                self.leaf_blob(&mut leaves, ix, cy, iz, rxs, rys, leaf, 0);
-                if rxs >= 3 {
-                    for k in 0..3 {
-                        let (sa, ca) = math::sin_cos(hs(10 + k) * math::TAU);
-                        let (ox, oz) = ((ca * (rxs - 1) as f32).round() as i32, (sa * (rxs - 1) as f32).round() as i32);
-                        self.leaf_blob(&mut leaves, ix + ox, cy - 1 - (k % 2), iz + oz, (rxs - 1).max(1), (rys - 1).max(1), leaf, 17 * (k + 1));
+                let y0 = base + th;
+                for (k, &r) in radii.iter().enumerate() {
+                    let lim = r * r + r / 2 + if r >= 3 { 1 } else { 0 };
+                    let y = y0 + k as i32;
+                    for dz in -r..=r {
+                        for dx in -r..=r {
+                            if dx * dx + dz * dz <= lim && self.put(ix + dx, y, iz + dz, leaf, false) {
+                                leaves.push((ix + dx, y, iz + dz));
+                            }
+                        }
                     }
                 }
                 if kind == 5 {
-                    // willow curtains: strands hang from the rim
+                    // willow curtains hang from the rim
+                    let rim_r = radii.iter().copied().max().unwrap_or(3);
                     let snapshot = leaves.clone();
                     for (x, y, z) in snapshot {
-                        let rim = (x - ix) * (x - ix) + (z - iz) * (z - iz) >= (rxs * rxs) / 2;
-                        if rim && y <= cy && u01(h3(self.seed, x, y, z)) < 0.45 {
+                        let rim = (x - ix) * (x - ix) + (z - iz) * (z - iz) >= rim_r * rim_r - 2;
+                        if rim && y <= y0 + 2 && u01(h3(self.seed, x, y, z)) < 0.5 {
                             let len = 2 + (u01(h3(self.seed, z, y, x)) * 3.0) as i32;
                             for k in 1..=len {
                                 if self.put(x, y - k, z, leaf, false) {
@@ -1007,14 +1077,6 @@ impl<'a> Gen<'a> {
                                 }
                             }
                         }
-                    }
-                }
-                if rxs >= 3 {
-                    // one visible branch entering the crown
-                    let (sa, ca) = math::sin_cos(hs(30) * math::TAU);
-                    let (bx, bz) = (ix + (ca * 1.6).round() as i32, iz + (sa * 1.6).round() as i32);
-                    if self.put(bx, base + th, bz, log, true) {
-                        logs.push((bx, base + th, bz));
                     }
                 }
             }
@@ -1237,11 +1299,43 @@ impl<'a> Gen<'a> {
     }
 }
 
+/// Canopy disc radii, bottom -> top (rounded layered crowns; consecutive layers differ by <= 1 so they stay connected).
+fn canopy_radii(kind: u32, big: bool) -> &'static [i32] {
+    match kind {
+        0 => {
+            if big {
+                &[2, 3, 4, 4, 3, 2, 1]
+            } else {
+                &[2, 3, 3, 3, 2, 1]
+            }
+        }
+        1 => &[2, 3, 3, 3, 3, 2, 1],
+        3 => {
+            if big {
+                &[2, 3, 3, 2, 1]
+            } else {
+                &[1, 2, 2, 1]
+            }
+        }
+        5 => &[2, 3, 3, 3, 2],
+        6 => &[1, 2, 2, 2, 2, 1],
+        7 => {
+            if big {
+                &[2, 3, 4, 4, 3, 2]
+            } else {
+                &[2, 3, 3, 3, 2]
+            }
+        }
+        _ => &[2, 3, 3, 2, 1],
+    }
+}
+
 /// Builds the voxel world from the generated design heightfield + the scattered flora records.
 pub fn build(g: &Generated, flora: &[f32], seed: u32) -> Built {
     let mut gx = Gen::new(g, seed);
     gx.heights();
     gx.despike();
+    gx.bathymetry();
     gx.pond();
     gx.streams();
     let plans = gx.plan_cottages();

@@ -59,3 +59,8 @@ WASD/arrows move · mouse drag or pointer-lock look · wheel zoom · Space jump 
 - Frozen = deterministic: `settle(n)` renders n frames with dt 0; `step(n)` advances n fixed frames then renders; `bench()` advances the sim.
 - Geometry attributes for ToonLit instancing: use `InstancedMesh` + `setColorAt`; wind weight = height/`windHeight`, or an `aSway` float attribute with `wind:{attr:true}`.
 - The in-engine Rust sim is optional: no pkg ⇒ MockGame automatically (console warning); present-but-broken pkg ⇒ console error + MockGame.
+
+## Voxel round 2 - look-file changes made by voxel-world (no look agent was active)
+- `Lighting.ts`: `tuning.fogScale` 0.24 -> 0.09 (milky haze); `lookState.hint` = external DOF focus distance in metres (0 = none). `Lighting.follow` uses it before the flat-ground guess; the voxel module writes the exact view-ray hit distance (`world.raycast`), so close-ups and ground-level cams focus on what they look at.
+- `Post.ts` (DOF): near blur only within ~0.15 x focus (1.5-5 m, was 0.3 x focus); far blur starts at >= 16 m; the tilt-shift band widens to ~97 % of the frame when the focus is close (< 6 m) and returns to `tiltFocus` beyond 40 m; sky pixels get 25 % of the tilt blur (clouds stay crisp); AO defaults `aoIntensity` 1.35 -> 1.0 and `aoStrength` 0.85 -> 0.55 (the voxel shader already has per-vertex AO; the screen-space pass double-darkened cliff / dirt faces).
+- Gotcha: shots are only comparable at an explicit `q=high` (the default quality can fall back under load; tall contact sheets also posterise when composited, look at the individual PNGs).
