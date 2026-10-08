@@ -1,0 +1,18 @@
+[package]
+name = "sim_micro"
+description = "Glimmerwick micro-voxel world: pure-function 1/16 m voxels derived from the 1 m block grid + binary greedy mesher (no Bevy)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Deliberately dependency-free so it compiles into the wasm bridge (or a second wasm module) trivially.
+[dependencies]
+
+[dev-dependencies]
+# Only for tests and the bench / render examples (real island, block registry cross-check).
+sim_core.workspace = true
+sim_world.workspace = true

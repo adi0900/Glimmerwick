@@ -816,6 +816,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sim_micro"
+version = "0.1.0"
+dependencies = [
+ "sim_core",
+ "sim_world",
+]
+
+[[package]]
 name = "sim_player"
 version = "0.1.0"
 dependencies = [
