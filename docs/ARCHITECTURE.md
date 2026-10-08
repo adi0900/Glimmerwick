@@ -1,6 +1,6 @@
 # Architecture & Collaboration Contract
 
-Project root: `E:\Pokemon+Minecraft+` (path contains `+` — quote it; if some tool chokes on it, tell the orchestrator).
+Project root: the repository root (if your checkout path contains special characters such as `+`, quote it; if some tool chokes on it, tell the orchestrator).
 Game: **Glimmerwick** (see GAME_DESIGN.md). Look: ART_BIBLE.md. Bar: QUALITY_BAR.md.
 
 ## 1. Stack
@@ -94,7 +94,7 @@ interface GameModule { name: string; order?: number /*default 100*/; needs?: str
 - `shots.json` convention: each module ships `web/src/modules/<name>/shots.json` = array of `{id, cam, time?, weather?, seed?, size?, filmstrip?:{frames,interval}}`; `node tools/shot.mjs --pack <name> --round N` renders them to `shots/<name>/rN/`.
 
 ## 6. Tools (Windows; PowerShell 5.1 primary — no `&&`; quote paths; use `curl.exe`)
-- Rust env: `. "E:\Pokemon+Minecraft+\tools\env.ps1"` (PowerShell) or `source tools/env.sh` (Git Bash) before cargo/wasm-bindgen.
+- Rust env: `. .\tools\env.ps1` (PowerShell) or `source tools/env.sh` (Git Bash) before cargo/wasm-bindgen.
 - `tools/build-wasm.ps1 [-Release]` → builds `bridge`, runs wasm-bindgen into `web/src/wasm/pkg/` via atomic swap (never leaves a half-written pkg).
 - Dev server: **http://localhost:5173** is kept running by the orchestrator (`preview_start web`). If it is down: `curl.exe -s -o NUL -w "%{http_code}" http://localhost:5173`, then ask the orchestrator in your report rather than starting servers.
 - `node tools/shot.mjs --view V --cam C [--time H --weather K --seed S --size 1920x1080 --settle 90 --out FILE] [--filmstrip N --interval MS] [--crop x,y,w,h --zoom Z] [--pack M --round R]` → PNG(s) + one JSON line (fps, frameMs, drawCalls, triangles, consoleErrors, pageErrors).
@@ -111,4 +111,4 @@ interface GameModule { name: string; order?: number /*default 100*/; needs?: str
 5. New dependencies: allowed if truly needed (`npm install <pkg>` from `web/`; Cargo deps in your own crate's Cargo.toml) — list them in your report. Never run two package installs at once; check `package.json` first.
 6. No long-lived background processes of your own (they die with you and confuse others). No extra dev servers.
 7. Final report to the orchestrator ≤ 300 words: what you built · how to view it (URL/cam presets) · known gaps · files touched · REQUESTS you filed.
-8. Quality first: you will be judged by a *harsh independent critic* against Pokémon / Animal Crossing / Minecraft polish (QUALITY_BAR.md). Do not hide weaknesses with camera angles or fog; fix them.
+8. Quality first: you will be judged by a *harsh independent critic* against the polish of the best first-party cozy-adventure games (QUALITY_BAR.md). Do not hide weaknesses with camera angles or fog; fix them.

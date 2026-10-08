@@ -1,7 +1,7 @@
 # Art Bible — "sunlit toy diorama"
 
 ## 0. DIRECTION CHANGE (2026-10-06, user-approved): **voxel diorama** — this section overrides anything below that conflicts
-Why: generated art reaches a polished look far faster in voxels (clean shapes, rich lighting), it fits the Minecraft-style building pillar, and it is the look the user asked for (voxel-diorama presentation: chunky extruded blocks, soft shadows, tilt-shift, reflective water). **Original assets only**, built from scratch; inspired by the *kind* of look in public voxel-diorama mods — no Pokémon art, code or ROM data (see THIRD_PARTY.md, CLEANROOM.md).
+Why: generated art reaches a polished look far faster in voxels (clean shapes, rich lighting), it fits the block-building pillar, and it is the look the user asked for (voxel-diorama presentation: chunky extruded blocks, soft shadows, tilt-shift, reflective water). **Original assets only**, built from scratch; no third-party art, code or data is used (see THIRD_PARTY.md, CLEANROOM.md).
 One line: *a sunlit tabletop diorama built from chunky, softly bevelled toy blocks — saturated palette, warm key light + cool shadows, ambient occlusion in every crease, tilt-shift depth of field, glittering reflective water.*
 - **Scales:** world block = 1 m (terrain, cliffs, houses, paths); half-block (0.5 m) slabs/stairs for detail; **micro-voxels ≈ 1/16 m** for creatures, characters, props, flowers, furniture (a 0.6 m critter ≈ 10–14 voxels long). Player ≈ 1.15 m (chibi, 2.5–3 heads). Island ≈ 300 × 240 m, up to ~48 blocks tall.
 - **Blocks read as toy blocks, not blurry pixel-art:** per-face painted texture (procedural, 32–64 px, hand-painted noise, per-block colour jitter ±6 %), **shader bevel** (soft 4–6 % edge highlight/darkening so every block catches light), smooth per-vertex AO (4-neighbour) + skylight, cool shadows. No flat vertex-colour cubes; crisp texels with mip bias tuned to avoid shimmer.
@@ -15,10 +15,7 @@ One line: *a sunlit tabletop diorama built from chunky, softly bevelled toy bloc
 cool tinted shadows, saturated-but-harmonised colour, gentle miniature-style depth of field, and hand-painted
 micro-detail on every surface. Reads instantly, feels delicious, looks lovingly crafted.
 
-Touchstones (study the *qualities*, never copy assets): Pokémon Legends: Arceus / Scarlet-Violet (charismatic creature
-design, painterly landscapes), Animal Crossing: New Horizons (toy-like materials, warm light, tilt-shift cosiness),
-Breath of the Wild (atmospheric depth, skies), Minecraft (chunky readable shapes, satisfying building),
-Kirby / Mario Wonder (squash-and-stretch juice), Ghibli backgrounds (painterly clouds, light).
+Touchstones (study the *qualities*, never copy assets): charismatic creature design and painterly landscapes, toy-like materials with warm light and tilt-shift cosiness, atmospheric depth and skies, chunky readable shapes and satisfying building, squash-and-stretch juice, painterly clouds and light.
 
 ## 1. Colour
 | token | hex | token | hex |
@@ -38,7 +35,7 @@ Kirby / Mario Wonder (squash-and-stretch juice), Ghibli backgrounds (painterly c
 
 Rules:
 - Never pure black or pure white. Darkest shadow >= 12 % luminance, hue-shifted toward blue-violet (~`#5B4B8A`);
-  brightest highlight warm (~`#FFF4D6`). **Shadows cool & saturated, lights warm** — the biggest "first-party Nintendo" tell.
+  brightest highlight warm (~`#FFF4D6`). **Shadows cool & saturated, lights warm** — the biggest "first-party studio" tell.
 - Derive shades by *hue-shifting* (darker = cooler/more saturated, lighter = warmer), not by mixing with black/white.
 - Saturation 55-85 % on hero elements, 30-55 % on backgrounds; distance shifts toward sky colour (aerial perspective).
 - Every frame has a clear 3-value structure (dark / mid / light); the focal point carries the highest contrast.

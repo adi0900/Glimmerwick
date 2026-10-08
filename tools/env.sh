@@ -1,4 +1,4 @@
-# Git Bash equivalent of env.ps1:   source "/e/Pokemon+Minecraft+/tools/env.sh"
+# Git Bash equivalent of env.ps1:   source tools/env.sh   (from the repo root)
 export RUSTUP_HOME='E:\RustToolchain\rustup'
 export CARGO_HOME='E:\RustToolchain\cargo'
 export CARGO_TARGET_DIR='E:\RustToolchain\target\glimmerwick'

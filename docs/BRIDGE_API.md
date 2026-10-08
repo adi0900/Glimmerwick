@@ -9,7 +9,7 @@ Contract version: `CONTRACT_VERSION = 1` (`build_info().contract`). Changes are 
 ## 1. Build, load, verify
 
 ```powershell
-. "E:\Pokemon+Minecraft+\tools\env.ps1"                       # Rust lives on E:
+. .\tools\env.ps1                                         # sets up the Rust toolchain paths
 powershell -File tools/build-wasm.ps1 [-Release]              # -> web/src/wasm/pkg/{bridge.js,bridge_bg.wasm,*.d.ts}
 node tools/smoke-wasm.mjs [--bench] [--expect-digest <hex>]   # 80 checks, non-zero exit on failure
 cargo test --workspace                                        # native tests

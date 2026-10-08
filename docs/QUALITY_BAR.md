@@ -1,8 +1,8 @@
 # Quality Bar & Critic Protocol
 
-**The test:** show a parent and a 9-year-old a still from our game next to a still from a flagship Nintendo / Game Freak title.
+**The test:** show a parent and a 9-year-old a still from our game next to a still from a flagship first-party cozy-adventure title.
 They should not be able to tell instantly which one is the indie. We match the *polish tier* (cohesion, lighting, materials,
-charm, animation, feedback) of Pokémon Legends: Arceus / Scarlet-Violet, Animal Crossing: New Horizons and Minecraft — with original IP.
+charm, animation, feedback) of the best first-party cozy-adventure games — with original IP.
 
 ## Rubric (integers 0-10; calibrate harshly; score only what you can SEE in screenshots you captured yourself)
 | axis | what it means |
@@ -17,14 +17,14 @@ charm, animation, feedback) of Pokémon Legends: Arceus / Scarlet-Violet, Animal
 | 8 Delight & juice | VFX, feedback, "I want to poke it" factor |
 | 9 Performance | meets budgets in ARCHITECTURE.md §7 (use tool stats) |
 
-Anchors: **10** indistinguishable from first-party Nintendo/Game Freak shipping stills · **9** could appear in their trailers without
+Anchors: **10** indistinguishable from first-party studio shipping stills · **9** could appear in their trailers without
 embarrassment · 8 top-tier indie/AA hit · 7 good indie · 6 competent hobby project · 4 prototype · 2 tech demo.
 **PASS = every applicable axis ≥ 9 AND the blind A/B (when refs exist) is won or called too-close.** Anything else is FAIL.
 
 ## Critic obligations (a critic is a separate agent from the builder; independence is the point)
 1. Capture your own evidence: run the module's shot pack yourself (`node tools/shot.mjs --pack <module> --round N`) — never trust builder-supplied images.
 2. View ≥ 6 distinct shots: ≥ 1 wide, ≥ 2 extreme close-ups, ≥ 2 times of day, ≥ 1 moving filmstrip (`--filmstrip 8 --interval 120`), plus **2 cameras you choose yourself** (the builder may hide weaknesses in presets). Crop/zoom into suspicious areas (`--crop --zoom`).
-3. Name specific benchmark comparisons ("Animal Crossing's grass reads as X; ours reads as Y because …"). Do not score ≥ 9 on an axis unless you can name what the flagship does and show ours matches it.
+3. Name specific benchmark comparisons ("a flagship cozy game's grass reads as X; ours reads as Y because …"). Do not score ≥ 9 on an axis unless you can name what the flagship does and show ours matches it.
 4. Never grade on effort, difficulty or "it's procedural / in a browser". Score the pixels. Don't soften between rounds; re-score from scratch.
 5. Output: (a) markdown critique with the **top 5 defects** ranked by visual impact — each = where (shot + region), why it reads as non-AAA, concrete fix hints (technique + parameter ranges); (b) JSON verdict
    `{"module","round","scores":{"1":n,…"9":n},"pass":bool,"top_defects":[…],"plateau":bool}` saved to `docs/critiques/<module>/round-N.json` and the markdown to `round-N.md`.
