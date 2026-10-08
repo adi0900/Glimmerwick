@@ -200,7 +200,7 @@ export class Input {
     if (this.lookEnabled && this.enabled) {
       this.yaw -= dx * this.lookSensitivity;
       this.pitch += dy * this.lookSensitivity * (this.invertY ? -1 : 1);
-      this.pitch = clamp(this.pitch, 0.02, 1.4);
+      this.pitch = clamp(this.pitch, -0.25, 1.4); // slightly below the horizon: the player can look up at the sky, trees and lighthouse
       this.yaw = ((this.yaw + Math.PI) % (Math.PI * 2)) - Math.PI;
       if (this.yaw < -Math.PI) this.yaw += Math.PI * 2;
     } else {

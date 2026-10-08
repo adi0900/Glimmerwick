@@ -127,7 +127,7 @@ fn registered_api_surface() {
     // event table covers every domain in use
     let events = json(&g.query("core.events", ""));
     let kinds: Vec<u64> = events.as_array().unwrap().iter().map(|e| e["kind"].as_u64().unwrap()).collect();
-    for k in [1u64, 2, 200, 201, 202, 203, 204, 205, 206, 300, 301, 302, 303, 304, 500, 501, 502, 503, 504] {
+    for k in [1u64, 2, 200, 201, 202, 203, 204, 205, 206, 300, 301, 302, 303, 304, 305, 500, 501, 502, 503, 504] {
         assert!(kinds.contains(&k), "event kind {k} not registered");
     }
 }

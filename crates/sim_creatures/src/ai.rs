@@ -28,6 +28,8 @@ pub enum State {
     Play = 5,
     Sleep = 6,
     Happy = 7,
+    /// Companion: follows the player at a short distance.
+    Follow = 8,
 }
 
 impl State {
@@ -41,6 +43,7 @@ impl State {
             State::Play => "play",
             State::Sleep => "sleep",
             State::Happy => "happy",
+            State::Follow => "follow",
         }
     }
 }
@@ -114,6 +117,14 @@ pub struct Brain {
     /// Locomotion class with hysteresis ([`gait`]).
     #[serde(default)]
     pub gait: u8,
+    /// Befriended: follows the player (see [`befriend`]).
+    pub companion: bool,
+    /// `0..1` how much the creature trusts the player (grows while the player is near and moving slowly).
+    pub trust: f32,
+    /// Seconds before another treat offer is considered.
+    pub offer_cooldown: f32,
+    /// Seconds a companion has been blocked on its way to the player.
+    pub stuck: f32,
     /// Transient: a steering call already ran this tick.
     #[serde(skip)]
     pub steered: bool,
@@ -136,6 +147,10 @@ impl Brain {
             speed: 0.0,
             yaw_rate: 0.0,
             gait: gait::IDLE,
+            companion: false,
+            trust: 0.0,
+            offer_cooldown: 0.0,
+            stuck: 0.0,
             steered: false,
         }
     }
@@ -181,7 +196,7 @@ impl Brain {
         if self.swimming {
             f += flags::IN_WATER;
         }
-        if self.focus != 0 && matches!(self.state, State::Notice | State::Approach | State::Flee | State::Play | State::Happy) {
+        if self.focus != 0 && matches!(self.state, State::Notice | State::Approach | State::Flee | State::Play | State::Happy | State::Follow) {
             f += flags::AWARE;
         }
         if self.state == State::Flee {
@@ -222,6 +237,8 @@ pub struct Surroundings<'a> {
     pub daylight: f32,
     /// Precomputed turn smoothing factor for this step.
     pub k_turn: f32,
+    /// Horizontal speed of the player (m/s); slow approaches build trust.
+    pub player_speed: f32,
 }
 
 /// Can `sp` stand at `(x, z)`?
@@ -237,6 +254,143 @@ pub fn walkable(sp: &Species, terrain: &HeightQuery, x: f32, z: f32) -> bool {
 pub fn stand_height(sp: &Species, terrain: &HeightQuery, x: f32, z: f32) -> (f32, bool) {
     let g = terrain.height(x, z);
     if sp.swims && terrain.sea_level() - g > 0.15 { (terrain.sea_level() - 0.12, true) } else { (g, false) }
+}
+
+
+/// Tuning of befriending and of the companion follow behaviour (one table, tweak here).
+pub mod befriend {
+    /// A treat can only be offered from this close (m, horizontal).
+    pub const RANGE: f32 = 3.8;
+    /// Seconds a creature ignores further offers after refusing one.
+    pub const COOLDOWN: f32 = 3.0;
+    /// Base acceptance chance by personality.
+    pub const BASE_CURIOUS: f32 = 0.55;
+    pub const BASE_PLAYFUL: f32 = 0.70;
+    pub const BASE_SHY: f32 = 0.15;
+    /// Added per unit of `mood - 0.5` (mood 0..1).
+    pub const MOOD_WEIGHT: f32 = 0.30;
+    /// Added when the offered treat is the species' favourite.
+    pub const FAVOURITE_BONUS: f32 = 0.25;
+    /// Added per unit of trust (shy creatures care a lot, others a little).
+    pub const TRUST_WEIGHT_SHY: f32 = 0.55;
+    pub const TRUST_WEIGHT_OTHER: f32 = 0.20;
+    /// Subtracted while the creature is running away.
+    pub const FLEE_PENALTY: f32 = 0.25;
+    /// Trust grows within this fraction of the notice radius while the player moves slower than `TRUST_SLOW_SPEED`.
+    pub const TRUST_RADIUS_FACTOR: f32 = 0.9;
+    pub const TRUST_SLOW_SPEED: f32 = 2.2;
+    pub const TRUST_GAIN_PER_S: f32 = 0.12;
+    pub const TRUST_DECAY_PER_S: f32 = 0.05;
+    /// Trust lost per second while the player charges around nearby faster than `TRUST_FAST_SPEED`.
+    pub const TRUST_FAST_SPEED: f32 = 4.0;
+    pub const TRUST_FAST_LOSS_PER_S: f32 = 0.35;
+    /// Companion: starts walking beyond `FOLLOW_START`, stops at `FOLLOW_STOP` (m); runs faster when far behind.
+    pub const FOLLOW_START: f32 = 3.8;
+    pub const FOLLOW_STOP: f32 = 2.3;
+    pub const FOLLOW_BOOST: f32 = 1.35;
+    /// Companion snaps next to the player when farther than this (m) or blocked for `STUCK_TELEPORT` seconds.
+    pub const FOLLOW_TELEPORT: f32 = 34.0;
+    pub const STUCK_TELEPORT: f32 = 3.0;
+}
+
+/// Chance (0.05..0.97) that the creature accepts a treat right now.
+pub fn offer_chance(sp: &Species, brain: &Brain, favourite: bool) -> f32 {
+    use befriend::*;
+    let (base, tw) = match sp.personality {
+        Personality::Curious => (BASE_CURIOUS, TRUST_WEIGHT_OTHER),
+        Personality::Playful => (BASE_PLAYFUL, TRUST_WEIGHT_OTHER),
+        Personality::Shy => (BASE_SHY, TRUST_WEIGHT_SHY),
+    };
+    let mut p = base + MOOD_WEIGHT * (brain.mood - 0.5) + tw * brain.trust;
+    if favourite {
+        p += FAVOURITE_BONUS;
+    }
+    if brain.state == State::Flee {
+        p -= FLEE_PENALTY;
+    }
+    p.clamp(0.05, 0.97)
+}
+
+/// Makes the creature a companion (it celebrates for a moment, then follows).
+pub fn become_companion(brain: &mut Brain, out: &mut Vec<AiEvent>) {
+    brain.companion = true;
+    brain.trust = 1.0;
+    brain.mood = 1.0;
+    brain.stuck = 0.0;
+    brain.enter(State::Happy, 1.8);
+    brain.show(emote::HEART, 2.2, out);
+}
+
+/// Trust bookkeeping: slow, quiet approaches build it, charging around wipes it.
+fn update_trust(sp: &Species, brain: &mut Brain, d2: Option<f32>, s: &Surroundings) {
+    use befriend::*;
+    let near = d2.is_some_and(|d2| {
+        let r = sp.notice_radius * TRUST_RADIUS_FACTOR;
+        d2 <= r * r
+    });
+    let dt = SIM_DT;
+    if near && s.player_speed > TRUST_FAST_SPEED {
+        brain.trust -= TRUST_FAST_LOSS_PER_S * dt;
+    } else if near && s.player_speed < TRUST_SLOW_SPEED {
+        brain.trust += TRUST_GAIN_PER_S * dt;
+    } else if !near {
+        brain.trust -= TRUST_DECAY_PER_S * dt;
+    }
+    brain.trust = brain.trust.clamp(0.0, 1.0);
+}
+
+/// Companion behaviour: keep a short distance behind the player, run when far, snap next to them when lost.
+fn follow_player(a: &mut Agent, rng: &mut Rng, s: &Surroundings, out: &mut Vec<AiEvent>) {
+    use befriend::*;
+    let Some((pid, p)) = s.player else { return };
+    a.brain.focus = pid;
+    if a.brain.state == State::Happy {
+        a.brain.timer -= SIM_DT;
+        face(a, p, s);
+        if a.brain.timer <= 0.0 {
+            a.brain.enter(State::Follow, 0.0);
+        }
+        return;
+    }
+    if a.brain.state != State::Follow {
+        a.brain.enter(State::Follow, 0.0);
+    }
+    let (dx, dz) = (p.x - a.pos.x, p.z - a.pos.z);
+    let d = (dx * dx + dz * dz).sqrt();
+    if d > FOLLOW_TELEPORT || (a.brain.stuck > STUCK_TELEPORT && d > FOLLOW_START + 2.0) {
+        // snap next to the player on the first walkable spot of a ring behind them
+        let base = rng.range_f32(0.0, math::TAU);
+        for k in 0..8 {
+            let ang = base + k as f32 * (math::TAU / 8.0);
+            let (x, z) = (p.x + ang.sin() * 2.4, p.z + ang.cos() * 2.4);
+            if walkable(a.sp, s.terrain, x, z) {
+                let (y, sw) = stand_height(a.sp, s.terrain, x, z);
+                *a.pos = Vec3::new(x, y, z);
+                a.brain.swimming = sw;
+                a.brain.speed = 0.0;
+                a.brain.stuck = 0.0;
+                a.brain.show(emote::SPARKLE, 0.8, out);
+                return;
+            }
+        }
+        a.brain.stuck = 0.0;
+        return;
+    }
+    let go = d > FOLLOW_START || (a.brain.speed > 0.15 && d > FOLLOW_STOP);
+    if go && d > 1e-3 {
+        let (ux, uz) = (dx / d, dz / d);
+        let goal = Vec2::new(p.x - ux * FOLLOW_STOP, p.z - uz * FOLLOW_STOP);
+        let far = smooth01((d - FOLLOW_START) / 8.0);
+        let vmax = a.sp.walk_speed + (a.sp.run_speed * FOLLOW_BOOST - a.sp.walk_speed) * far;
+        match step_toward(a, goal, vmax, s) {
+            Move::Blocked => a.brain.stuck += SIM_DT,
+            Move::Arrived => a.brain.stuck = 0.0,
+            Move::Moving => a.brain.stuck = (a.brain.stuck - SIM_DT).max(0.0),
+        }
+    } else {
+        face(a, p, s);
+        a.brain.stuck = 0.0;
+    }
 }
 
 enum Move {
@@ -395,6 +549,14 @@ fn decide(
     let player = s.player;
     let player_d2 = player.map(|(_, p)| math::dist2_xz(p, *a.pos));
 
+    // --- trust and companions -----------------------------------------------------------------
+    a.brain.offer_cooldown = (a.brain.offer_cooldown - SIM_DT).max(0.0);
+    update_trust(sp, a.brain, player_d2, s);
+    if a.brain.companion {
+        follow_player(&mut a, rng, s, out);
+        return;
+    }
+
     // --- sleep / wake -------------------------------------------------------------------------
     if a.brain.state == State::Sleep {
         if !s.night && s.daylight > 0.4 {
@@ -532,7 +694,7 @@ fn decide(
                 a.brain.enter(State::Idle, rng.range_f32(1.0, 3.0));
             }
         }
-        State::Sleep => {}
+        State::Sleep | State::Follow => {}
     }
 }
 
@@ -606,7 +768,7 @@ mod tests {
         }
 
         fn run(&mut self, terrain: &HeightQuery, player: Option<(u32, Vec3)>, night: bool, steps: usize) {
-            let s = Surroundings { terrain, player, night, daylight: if night { 0.0 } else { 1.0 }, k_turn: math::damp_factor(6.0, SIM_DT) };
+            let s = Surroundings { terrain, player, night, daylight: if night { 0.0 } else { 1.0 }, k_turn: math::damp_factor(6.0, SIM_DT), player_speed: 0.0 };
             for _ in 0..steps {
                 self.events.clear();
                 think(self.sp, self.home, &mut self.pos, &mut self.yaw, &mut self.brain, &mut self.rng, &s, &mut self.events);
@@ -621,7 +783,7 @@ mod tests {
         let mut r = Rig::new(PUFFBUN, Vec3::new(5.0, 0.0, 5.0));
         let mut wandered = false;
         let mut max_d = 0.0f32;
-        let s = Surroundings { terrain: &t, player: None, night: false, daylight: 1.0, k_turn: math::damp_factor(6.0, SIM_DT) };
+        let s = Surroundings { terrain: &t, player: None, night: false, daylight: 1.0, k_turn: math::damp_factor(6.0, SIM_DT), player_speed: 0.0 };
         for _ in 0..6000 {
             r.events.clear();
             think(r.sp, r.home, &mut r.pos, &mut r.yaw, &mut r.brain, &mut r.rng, &s, &mut r.events);
@@ -739,7 +901,7 @@ mod tests {
         r.brain.enter(State::Wander, 60.0);
         r.brain.target = Vec2::new(20.0, 0.0);
         let (mut floated, mut max_x) = (false, f32::MIN);
-        let s = Surroundings { terrain: &t, player: None, night: false, daylight: 1.0, k_turn: math::damp_factor(6.0, SIM_DT) };
+        let s = Surroundings { terrain: &t, player: None, night: false, daylight: 1.0, k_turn: math::damp_factor(6.0, SIM_DT), player_speed: 0.0 };
         for _ in 0..3600 {
             think(r.sp, r.home, &mut r.pos, &mut r.yaw, &mut r.brain, &mut r.rng, &s, &mut Vec::new());
             floated |= r.brain.swimming && (r.pos.y - (-0.12)).abs() < 1e-4;

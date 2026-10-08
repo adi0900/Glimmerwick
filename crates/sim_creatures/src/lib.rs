@@ -13,7 +13,7 @@
 mod ai;
 mod species;
 
-pub use ai::{AiEvent, Brain, State, anim, emote, flags, on_interact, think};
+pub use ai::{AiEvent, Brain, State, anim, befriend, emote, flags, offer_chance, on_interact, think};
 pub use species::{PUFFBUN, Personality, SPECIES, SPRIGFOX, Species, TIDLER, VARIANTS, name_for, species};
 
 use bevy_app::{App, Plugin, Startup, Update};
@@ -24,7 +24,7 @@ use sim_core::math::{self, Vec3};
 use sim_core::rng::Rng;
 use sim_core::{
     ChannelId, ChannelSpec, Channels, Environment, EventBus, HeightQuery, Id, IdAllocator, IdIndex, Interact, Interactable, Player,
-    Position, SIM_DT, SimAppExt, SimPublish, SimSet, StartupSet, Yaw,
+    Position, SIM_DT, SimAppExt, SimPublish, SimSet, StartupSet, Velocity, Yaw,
 };
 
 /// `f32` elements per creature record.
@@ -47,6 +47,8 @@ pub mod events {
     pub const SLEEP: EventKind = EventKind::creatures(3);
     /// A creature woke up. `a` = creature id, `b` = species.
     pub const WAKE: EventKind = EventKind::creatures(4);
+    /// A creature accepted a treat and became a companion. `a` = creature id, `b` = species, `f` = variant, position = creature.
+    pub const BEFRIENDED: EventKind = EventKind::creatures(5);
 }
 
 /// Identity of a creature.
@@ -199,7 +201,7 @@ type CreatureAiQuery<'w, 's> = Query<
 
 fn creature_ai(
     mut creatures: CreatureAiQuery,
-    player: Option<Single<(&Id, &Position), With<Player>>>,
+    player: Option<Single<(&Id, &Position, &Velocity), With<Player>>>,
     env: Res<Environment>,
     terrain: Res<HeightQuery>,
     mut bus: ResMut<EventBus>,
@@ -207,13 +209,17 @@ fn creature_ai(
 ) {
     let surroundings = ai::Surroundings {
         terrain: &terrain,
-        player: player.map(|p| {
-            let (id, pos) = p.into_inner();
+        player: player.as_ref().map(|p| {
+            let (id, pos, _) = &**p;
             (id.0, pos.0)
         }),
         night: env.is_night(),
         daylight: env.daylight(),
         k_turn: math::damp_factor(6.0, SIM_DT),
+        player_speed: player.as_ref().map_or(0.0, |p| {
+            let (_, _, vel) = &**p;
+            (vel.0.x * vel.0.x + vel.0.z * vel.0.z).sqrt()
+        }),
     };
     for (id, c, home, mut pos, mut yaw, mut brain, mut rng) in &mut creatures {
         scratch.clear();
@@ -296,6 +302,98 @@ struct SpawnArgs {
 #[derive(Deserialize)]
 struct InfoArgs {
     id: u32,
+}
+
+#[derive(Deserialize)]
+struct OfferArgs {
+    id: u32,
+    /// Item key of the treat (`berry`, `apple`, `orange`, ...); compared with the species' favourite.
+    #[serde(default)]
+    treat: String,
+}
+
+/// `creature.offer_treat`: the player offers a treat to a creature close by. Decides (deterministically, from the
+/// creature's own RNG stream) whether it accepts and becomes a companion. The treat is only used up on success.
+fn offer_treat(world: &mut World, a: OfferArgs) -> Result<Value, String> {
+    let entity = world.resource::<IdIndex>().get(a.id).ok_or_else(|| format!("no entity with id {}", a.id))?;
+    let c = *world.get::<Creature>(entity).ok_or_else(|| format!("entity {} is not a creature", a.id))?;
+    let player = {
+        let mut q = world.query_filtered::<&Position, With<Player>>();
+        q.iter(world).next().map(|p| p.0)
+    };
+    let Some(player) = player else { return Err("no player".to_string()) };
+    let sp = species(c.species);
+    let pos = world.get::<Position>(entity).map(|p| p.0).unwrap_or_default();
+    let name = name_for(a.id);
+    let reply = |reason: &str, chance: f32, favourite: bool| {
+        json!({ "ok": false, "befriended": false, "reason": reason, "chance": chance, "favourite": favourite,
+                "id": a.id, "name": name, "species": c.species, "variant": c.variant })
+    };
+    let favourite = !a.treat.is_empty() && a.treat == sp.favourite;
+    let (state, companion, cooldown, chance) = {
+        let b = world.get::<Brain>(entity).ok_or("creature has no brain")?;
+        (b.state, b.companion, b.offer_cooldown, offer_chance(sp, b, favourite))
+    };
+    if companion {
+        return Ok(reply("already_friend", 1.0, favourite));
+    }
+    if math::dist2_xz(player, pos).sqrt() > befriend::RANGE {
+        return Ok(reply("too_far", chance, favourite));
+    }
+    if state == State::Sleep {
+        return Ok(reply("asleep", chance, favourite));
+    }
+    if cooldown > 0.0 {
+        return Ok(reply("wait", chance, favourite));
+    }
+    let accepted = world.get_mut::<CreatureRng>(entity).ok_or("no rng")?.0.chance(chance);
+    let mut out: Vec<AiEvent> = Vec::new();
+    {
+        let mut b = world.get_mut::<Brain>(entity).ok_or("no brain")?;
+        if accepted {
+            ai::become_companion(&mut b, &mut out);
+        } else {
+            b.offer_cooldown = befriend::COOLDOWN;
+            b.mood = (b.mood - 0.05).max(0.0);
+            if sp.personality == Personality::Shy {
+                // startled: loses half its trust and darts away for a moment
+                b.trust *= 0.5;
+                b.focus = 0;
+                b.state = State::Flee;
+                b.timer = 1.6;
+                b.anim_t = 0.0;
+            }
+            b.emote = emote::QUESTION;
+            b.emote_timer = 1.4;
+            out.push(AiEvent::Emoted(emote::QUESTION));
+        }
+    }
+    let mut bus = world.resource_mut::<EventBus>();
+    for ev in out {
+        if let AiEvent::Emoted(e) = ev {
+            bus.emit(events::EMOTE, a.id as f32, f32::from(e), pos, f32::from(c.species));
+        }
+    }
+    if accepted {
+        bus.emit(events::BEFRIENDED, a.id as f32, f32::from(c.species), pos, f32::from(c.variant));
+    }
+    let mut r = reply(if accepted { "befriended" } else { "not_yet" }, chance, favourite);
+    r["ok"] = json!(true);
+    r["befriended"] = json!(accepted);
+    Ok(r)
+}
+
+fn companions(world: &World, _: Value) -> Result<Value, String> {
+    let mut rows: Vec<(u32, u8, u8)> = Vec::new();
+    if let Some(mut q) = world.try_query::<(&Id, &Creature, &Brain)>() {
+        for (id, c, b) in q.iter(world) {
+            if b.companion {
+                rows.push((id.0, c.species, c.variant));
+            }
+        }
+    }
+    rows.sort_unstable();
+    Ok(json!(rows.iter().map(|(id, sp, v)| json!({ "id": id, "name": name_for(*id), "species": sp, "variant": v })).collect::<Vec<_>>()))
 }
 
 fn resolve_species(arg: &SpeciesArg) -> Result<u8, String> {
@@ -384,6 +482,9 @@ fn creature_info(world: &World, a: InfoArgs) -> Result<Value, String> {
         "emote": brain.emote,
         "pos": [pos.x, pos.y, pos.z],
         "asleep": brain.state == State::Sleep,
+        "companion": brain.companion,
+        "trust": brain.trust,
+        "favourite": sp.favourite,
     }))
 }
 
@@ -456,7 +557,9 @@ fn restore(world: &mut World, save: CreaturesSave) -> Result<(), String> {
 
 fn register_api(app: &mut App) {
     app.register_command("debug.spawn_creature", spawn_command);
+    app.register_command("creature.offer_treat", offer_treat);
     app.register_query("creature.info", creature_info);
+    app.register_query("creature.companions", companions);
     app.register_query("creature.species", |_: &World, _: Value| {
         let list: Vec<Value> = SPECIES
             .iter()
@@ -464,7 +567,7 @@ fn register_api(app: &mut App) {
             .map(|(i, s)| {
                 json!({
                     "id": i, "name": s.name, "personality": s.personality.name(), "habitat": s.habitat,
-                    "swims": s.swims, "base_scale": s.base_scale, "variants": VARIANTS,
+                    "swims": s.swims, "base_scale": s.base_scale, "variants": VARIANTS, "favourite": s.favourite,
                 })
             })
             .collect();
@@ -475,9 +578,10 @@ fn register_api(app: &mut App) {
         .register_event(events::EMOTE, "creature.emote", "a = creature id, b = emote id, f = species, pos = creature")
         .register_event(events::SPAWNED, "creature.spawned", "a = creature id, b = species")
         .register_event(events::SLEEP, "creature.sleep", "a = creature id, b = species")
-        .register_event(events::WAKE, "creature.wake", "a = creature id, b = species");
+        .register_event(events::WAKE, "creature.wake", "a = creature id, b = species")
+        .register_event(events::BEFRIENDED, "creature.befriended", "a = creature id, b = species, f = variant, pos = creature");
 
-    app.register_save_section("creatures", 1, capture, restore);
+    app.register_save_section("creatures", 2, capture, restore);
 }
 
 #[cfg(test)]
@@ -688,6 +792,86 @@ mod tests {
         let mut save = capture(a.world());
         save.creatures[1].creature.species = 99;
         assert!(restore(a.world_mut(), save).is_err());
+    }
+
+    /// Adds a player entity (the plugin under test has none) and moves it.
+    fn put_player(s: &mut Sim, x: f32, z: f32) {
+        let existing = s.world_mut().query_filtered::<&mut Position, With<Player>>().iter_mut(s.world_mut()).count();
+        if existing == 0 {
+            s.world_mut().spawn((Player, Id(9999), Position(Vec3::new(x, 0.8, z)), Velocity(Vec3::ZERO)));
+        }
+        let mut q = s.world_mut().query_filtered::<&mut Position, With<Player>>();
+        for mut p in q.iter_mut(s.world_mut()) {
+            p.0 = Vec3::new(x, 0.8, z);
+        }
+    }
+
+    fn spawn_at(s: &mut Sim, species: &str, x: f32, z: f32) -> u32 {
+        let r: Value = serde_json::from_str(&s.command("debug.spawn_creature", &format!(r#"{{"species":"{species}","x":{x},"z":{z}}}"#))).unwrap();
+        r["id"].as_u64().unwrap() as u32
+    }
+
+    fn offer(s: &mut Sim, id: u32, treat: &str) -> Value {
+        serde_json::from_str(&s.command("creature.offer_treat", &format!(r#"{{"id":{id},"treat":"{treat}"}}"#))).unwrap()
+    }
+
+    #[test]
+    fn befriending_makes_a_companion_that_follows() {
+        let mut s = sim(21);
+        put_player(&mut s, 0.0, 0.0);
+        let id = spawn_at(&mut s, "Tidler", 3.0, 0.0);
+        put_player(&mut s, -6.0, 0.0);
+        assert_eq!(offer(&mut s, id, "orange")["reason"], "too_far");
+        put_player(&mut s, 1.0, 0.0);
+        let mut ok = false;
+        for _ in 0..40 {
+            let r = offer(&mut s, id, "orange");
+            if r["befriended"] == true {
+                ok = true;
+                break;
+            }
+            assert!(["not_yet", "wait", "too_far"].contains(&r["reason"].as_str().unwrap()), "{r}");
+            for _ in 0..200 {
+                s.step_once();
+            }
+            // keep the player close to it
+            let p = records(&s).into_iter().find(|c| c[0] == id as f32).unwrap();
+            put_player(&mut s, p[3] - 1.5, p[5]);
+        }
+        assert!(ok, "never befriended");
+        assert!(s.drain_events().chunks(7).any(|e| e[0] == f32::from(events::BEFRIENDED.0) && e[1] == id as f32));
+        assert_eq!(offer(&mut s, id, "orange")["reason"], "already_friend");
+        let comps: Value = serde_json::from_str(&s.query("creature.companions", "")).unwrap();
+        assert_eq!(comps.as_array().unwrap().len(), 1);
+        // the player walks away: the companion catches up
+        put_player(&mut s, 20.0, 5.0);
+        for _ in 0..(60 * 25) {
+            s.step_once();
+        }
+        let r = records(&s).into_iter().find(|c| c[0] == id as f32).unwrap();
+        let d = ((r[3] - 20.0).powi(2) + (r[5] - 5.0).powi(2)).sqrt();
+        assert!(d < 5.5, "companion lagging {d} m behind");
+        // far away: it snaps next to the player
+        put_player(&mut s, -40.0, 0.0);
+        for _ in 0..30 {
+            s.step_once();
+        }
+        let r = records(&s).into_iter().find(|c| c[0] == id as f32).unwrap();
+        let d = ((r[3] + 40.0).powi(2) + r[5].powi(2)).sqrt();
+        assert!(d < 6.0, "companion did not catch up: {d}");
+    }
+
+    #[test]
+    fn shy_creatures_need_a_slow_approach() {
+        let sp = species(SPRIGFOX);
+        let mut rng = Rng::from_seed(3);
+        let mut b = Brain::new(&mut rng);
+        let cold = offer_chance(sp, &b, false);
+        b.trust = 1.0;
+        let warm = offer_chance(sp, &b, true);
+        assert!(cold < 0.25 && warm > 0.85, "{cold} {warm}");
+        let curious = offer_chance(species(PUFFBUN), &Brain::new(&mut rng), false);
+        assert!(curious > cold + 0.3);
     }
 
     /// Dev aid: `cargo test -p sim_creatures --release bench -- --ignored --nocapture`

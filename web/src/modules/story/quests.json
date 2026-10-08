@@ -1,0 +1,33 @@
+{
+  "_note": "Main quest chain (docs/STORY.md). cond kinds: told | collect{item,n} | craft{item,n} | placedVillage{n} | friend{species,n} | friends{n} | dex{n} | flag{flag}. needs = a gate that must hold before the giver can start the step (shows its own progress). markers = world pickups/interact spots (placeholders for the full companion-ability content).",
+  "steps": [
+    { "id": "s1", "act": 1, "title": "Welcome, Keeper!", "hint": "Walk to Pip on the village green and press E to talk.", "giver": "pip", "intro": "pip.s1", "cond": { "kind": "told" }, "reward": { "berry": 3 } },
+    { "id": "s2", "act": 1, "title": "Sawdust and Sparkle", "hint": "Hold F (or click) on a tree trunk to gather 6 logs.", "giver": "pip", "intro": "pip.s2", "cond": { "kind": "collect", "item": "log", "n": 6 }, "reward": { "planks": 4 } },
+    { "id": "s3", "act": 1, "title": "Plank Plan", "hint": "Press C for the Workbench and make some planks.", "giver": "pip", "intro": "pip.s3", "cond": { "kind": "craft", "item": "planks", "n": 1 }, "reward": { "log": 3 } },
+    { "id": "s4", "act": 1, "title": "A Roof Over Your Head", "hint": "Place 20 blocks near the village green: pick a block (1-0), then press X.", "giver": "pip", "intro": "pip.s4", "cond": { "kind": "placedVillage", "n": 20 }, "reward": { "cookie": 3, "glass": 4 } },
+    { "id": "s5", "act": 1, "title": "Hello, Little Light", "hint": "Hold a berry, walk slowly up to a Puffbun and press E.", "giver": "pip", "intro": "pip.s5", "cond": { "kind": "friend", "species": 0, "n": 1 }, "reward": { "lantern": 2 } },
+    { "id": "s6", "act": 1, "title": "Bram Arrives", "hint": "Keep building near the green: 60 blocks make the village grow. Then say hi to Bram.", "giver": "bram", "intro": "bram.s6", "needs": { "kind": "placedVillage", "n": 60, "label": "Build up to village level 1" }, "cond": { "kind": "told" }, "reward": { "orange": 3, "apple": 3 } },
+    { "id": "s7", "act": 2, "title": "The Ripple Lens", "hint": "Befriend a Tidler at the pond (they love oranges). It will dive for the lens.", "giver": "pip", "intro": "pip.s7", "cond": { "kind": "flag", "flag": "lens_ripple" }, "marker": "lens_ripple", "reward": { "orange": 3 } },
+    { "id": "s8", "act": 2, "title": "The Whisper Lens", "hint": "Befriend a Sprigfox in the forest (bring apples), then follow the glow to the old stump.", "giver": "pip", "intro": "pip.s8", "cond": { "kind": "flag", "flag": "lens_whisper" }, "marker": "lens_whisper", "reward": { "apple": 3, "cookie": 2 } },
+    { "id": "s9", "act": 2, "title": "The Cheer Lens", "hint": "Climb the north path to the highland meadow and find the sparkly clover.", "giver": "bram", "intro": "bram.s9", "cond": { "kind": "flag", "flag": "lens_cheer" }, "marker": "lens_cheer", "reward": { "cobble": 10, "lantern": 2 } },
+    { "id": "s10", "act": 3, "title": "Build the Beacon", "hint": "Bring 10 cobble and the three lenses to the lighthouse pedestal. Press E there.", "giver": "bram", "intro": "bram.s10", "cond": { "kind": "flag", "flag": "beacon_lit" }, "marker": "pedestal", "reward": { "cookie": 4 } },
+    { "id": "s11", "act": 3, "title": "Glimmerlight Night", "hint": "The light is back! Join everyone on the village green for the festival.", "giver": "pip", "intro": "pip.s11", "cond": { "kind": "told" }, "autoplay": true, "reward": { "lantern": 6, "cookie": 6 } },
+    { "id": "w1", "act": 4, "free": true, "title": "Village Wish: Cosy Corners", "hint": "Decorate! Place 100 more blocks near the green: gardens, lamps, anything.", "giver": "pip", "cond": { "kind": "placedVillage", "n": 160 }, "reward": { "lantern": 4 } },
+    { "id": "w2", "act": 4, "free": true, "title": "Village Wish: Full Dex", "hint": "Find all 9 Glimmers in the Glimmerdex (G).", "giver": "pip", "cond": { "kind": "dex", "n": 9 }, "reward": { "cookie": 8 } },
+    { "id": "w3", "act": 4, "free": true, "title": "Village Wish: Many Friends", "hint": "Make 6 Glimmer friends. Every friend lights up the village a little.", "giver": "pip", "cond": { "kind": "friends", "n": 6 }, "reward": { "lantern": 6 } }
+  ],
+  "markers": {
+    "lens_ripple": { "name": "Ripple Lens", "color": "#59C8F0", "where": "pond", "prompt": "Pick up the Ripple Lens", "when": { "kind": "friend", "species": 1, "n": 1 }, "flag": "lens_ripple", "toast": "The Tidler found the Ripple Lens!" },
+    "lens_whisper": { "name": "Whisper Lens", "color": "#7FE6A0", "where": "forest", "prompt": "Pick up the Whisper Lens", "when": { "kind": "friend", "species": 2, "n": 1 }, "flag": "lens_whisper", "toast": "The Sprigfox sniffed out the Whisper Lens!" },
+    "lens_cheer": { "name": "Cheer Lens", "color": "#FFD35A", "where": "highland", "prompt": "Pick up the Cheer Lens", "when": { "kind": "friends", "n": 3 }, "flag": "lens_cheer", "toast": "You found the Cheer Lens!" },
+    "pedestal": { "name": "Lens pedestal", "color": "#FFFFFF", "where": "lighthouse", "prompt": "Set the lenses on the pedestal", "when": { "kind": "flag", "flag": "lens_cheer" } }
+  },
+  "levels": [
+    { "level": 0, "name": "Sleepy hamlet" },
+    { "level": 1, "name": "Cosy village", "npc": "bram", "toast": "Village level 1! Bram Brickle moved in." },
+    { "level": 2, "name": "Busy village", "npc": "marlo", "toast": "Village level 2! Marlo Finn moved in." },
+    { "level": 3, "name": "Friendly village", "npc": "willa", "toast": "Village level 3! Willa Bloomsby moved in." },
+    { "level": 4, "name": "Glimmerlight village", "toast": "Village level 4! The Glimmerlight shines again." }
+  ],
+  "levelRules": { "l1PlacedVillage": 60, "l2Species": 1, "l3Species": 2 }
+}

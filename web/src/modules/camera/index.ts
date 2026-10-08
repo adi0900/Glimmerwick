@@ -25,7 +25,7 @@ export const RIG_DEFAULTS = {
   omegaXZ: 10,
   omegaY: 6,
   /** seconds of smoothed velocity the look target leads the player by */
-  lookAhead: 0.28,
+  lookAhead: 0.1,
   /** time constant (s) of the velocity low-pass feeding look-ahead / recenter / fov */
   velTau: 0.12,
   /** look target height above the feet (m) */
@@ -35,7 +35,7 @@ export const RIG_DEFAULTS = {
   armZoom: 5.4,
   fov: 52,
   /** fov multiplier at full sprint (spec design default 1.12); 1 = no kick */
-  fovKick: 1.12,
+  fovKick: 1.06,
   fovTau: 0.15,
   collideRadius: 0.28,
   collideMargin: 0.3,
@@ -43,7 +43,7 @@ export const RIG_DEFAULTS = {
   /** how fast the arm relaxes back out after a collision (1/s) */
   armOutRate: 2.5,
   /** auto-recenter: max yaw speed (rad/s, 0 = off), idle delay (s), minimum speed (m/s) */
-  recenterRate: 0.6,
+  recenterRate: 0, // off by default: the camera never swings on its own (tunable in F4)
   recenterDelay: 1.2,
   recenterMinSpeed: 2.0,
 };
@@ -184,10 +184,23 @@ export class CameraRig {
   armNow = 0;
   armWanted = 0;
 
+  /** "Click to play" cue, shown while the mouse is not captured (real players only; automated runs stay clean) */
+  private prompt: HTMLDivElement | null = null;
+
   init(ctx: Ctx): void {
     this.grid.init(ctx);
     this.lastYaw = ctx.input.yaw;
     this.lastPitch = ctx.input.pitch;
+    if (ctx.view.isGame && !ctx.view.automated && typeof document !== 'undefined') {
+      const el = document.createElement('div');
+      el.textContent = 'Click to play  ·  WASD move  ·  Shift sprint  ·  Space jump  ·  [ ] turn  ·  H help  ·  Esc to pause';
+      el.style.cssText =
+        'position:fixed;left:50%;top:64%;transform:translateX(-50%);padding:14px 26px 16px;border-radius:999px;background:#FFF7E8;color:#4A3B52;' +
+        'font:600 20px Fredoka,system-ui,sans-serif;box-shadow:0 4px 0 rgba(74,59,82,.3),0 14px 34px rgba(0,0,0,.35);pointer-events:none;z-index:50;' +
+        'transition:opacity .25s;white-space:nowrap;max-width:94vw;overflow:hidden;text-overflow:ellipsis';
+      document.body.append(el);
+      this.prompt = el;
+    }
   }
 
   update(ctx: Ctx, dt: number): void {
@@ -197,6 +210,12 @@ export class CameraRig {
     const inp = ctx.input;
     const step = Math.min(Math.max(dt, 0), 0.1);
     this.grid.refresh(ctx);
+    if (this.prompt) this.prompt.style.opacity = inp.pointerLocked ? '0' : '1';
+    // [ and ] turn the camera (keyboard-only and trackpad players); ~110 deg/s. (Q/E are the tool / befriend keys.)
+    if (inp.enabled && inp.lookEnabled && step > 0) {
+      const turn = (inp.key('BracketLeft') ? 1 : 0) - (inp.key('BracketRight') ? 1 : 0);
+      if (turn) inp.yaw = wrapPi(inp.yaw + turn * 1.9 * step);
+    }
 
     // smoothed velocity (look-ahead, recenter, fov)
     if (!this.started) {

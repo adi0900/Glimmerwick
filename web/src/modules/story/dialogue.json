@@ -1,0 +1,102 @@
+{
+  "_note": "Dialogue nodes: speaker, text (max ~140 chars), next, choices[{text,next}], set[flags]. A conversation is the chain starting at the id used in quests.json/npcs.json. Idle lines rotate by time (day|dusk|night) and village level.",
+  "nodes": {
+    "pip.s1": { "speaker": "pip", "text": "Oh! You're the new Keeper! I'm Pip. This is the village. It's... cosy. Dusty, but cosy.", "next": "pip.s1b" },
+    "pip.s1b": { "speaker": "pip", "text": "See that old lighthouse? The Glimmerlight is dimming and the Glimmers are getting sleepy. We need a Keeper. That's you!", "choices": [ { "text": "I'll help!", "next": "pip.s1d" }, { "text": "Tell me more!", "next": "pip.s1c" } ] },
+    "pip.s1c": { "speaker": "pip", "text": "Three lenses made the light shine. They got lost where Glimmers like to nap. Nobody is cross. We just need to find them!", "next": "pip.s1d" },
+    "pip.s1d": { "speaker": "pip", "text": "First, let's make this a home. Come and see me whenever my little ! bounces. I always have a plan. And a clipboard." },
+
+    "pip.s2": { "speaker": "pip", "text": "Every great village starts with a log. Or six. I'd say six.", "next": "pip.s2b" },
+    "pip.s2b": { "speaker": "pip", "text": "Hold F, or click, on a tree trunk to chop it. The trees don't mind. Mostly.", "choices": [ { "text": "On it!" }, { "text": "Where are trees?", "next": "pip.s2c" } ] },
+    "pip.s2c": { "speaker": "pip", "text": "Anywhere with leaves on top! There's a lovely bunch just past the green." },
+
+    "pip.s3": { "speaker": "pip", "text": "Logs are lovely, but planks are practical. Press C for the Workbench and make some. It's like baking, but with wood.", "next": "pip.s3b" },
+    "pip.s3b": { "speaker": "pip", "text": "Planks. Say it with me: planks.", "choices": [ { "text": "Planks!", "next": "pip.s3c" }, { "text": "Later!" } ] },
+    "pip.s3c": { "speaker": "pip", "text": "Wonderful! You're a natural. Off you go!" },
+
+    "pip.s4": { "speaker": "pip", "text": "Time for a home! Stack 20 blocks right here by the green. This first cottage will be yours, Keeper!", "next": "pip.s4b" },
+    "pip.s4b": { "speaker": "pip", "text": "Pick a block with 1 to 0, then press X or right-click to place it. I'll supervise. With my clipboard." },
+
+    "pip.s5": { "speaker": "pip", "text": "What a cosy start! Now the Glimmers. They're shy, but a berry says hello in every language.", "next": "pip.s5b" },
+    "pip.s5b": { "speaker": "pip", "text": "Find a Puffbun, hold a berry and press E. Walk slowly. Puffbuns are curious, not brave." },
+
+    "bram.s6": { "speaker": "bram", "text": "Name's Bram. I build things. Mostly walls. Mostly puns about walls. They're load-bearing.", "next": "bram.s6b" },
+    "bram.s6b": { "speaker": "bram", "text": "Saw your cottage from the road. Not bad! A little... left-leaning. Like me.", "choices": [ { "text": "Ha!", "next": "bram.s6c" }, { "text": "Oh, Bram.", "next": "bram.s6c" } ] },
+    "bram.s6c": { "speaker": "bram", "text": "Heh. When the lenses turn up I'll need 10 cobble for the lens pedestal. No rush. Walls take time." },
+
+    "pip.s7": { "speaker": "pip", "text": "Glimmers napped on the Ripple Lens by the pond. Your Puffbun knows the way. Follow it!", "next": "pip.s7b" },
+    "pip.s7b": { "speaker": "pip", "text": "Befriend a Tidler there, with an orange and a splashy game. It will dive for the lens. Dive. Lens. Get it?" },
+
+    "pip.s8": { "speaker": "pip", "text": "Next, the forest! Befriend a Sprigfox, apples are their favourite. They're shy, so walk softly.", "next": "pip.s8b" },
+    "pip.s8b": { "speaker": "pip", "text": "A good friend can sniff out glowcaps. Follow the glow to an old stump. Something lens-shaped is napping there." },
+
+    "bram.s9": { "speaker": "bram", "text": "Last lens is up in the highland meadow. Take the north path up the ramp. Follow the sparkly clover.", "next": "bram.s9b" },
+    "bram.s9b": { "speaker": "bram", "text": "I'd build you a bridge but I'm all out of pun-ctuation. Take your friends. Glimmers love a hike." },
+
+    "bram.s10": { "speaker": "bram", "text": "Three lenses, one pedestal, zero ceiling leaks. Meet me at the lighthouse and bring 10 cobble.", "next": "bram.s10b" },
+    "bram.s10b": { "speaker": "bram", "text": "Press E on the pedestal to set the lenses. I'll hold the ladder. Figuratively." },
+
+    "marlo.hello": { "speaker": "marlo", "text": "The tide told me you were coming. It also told me to bring snacks.", "next": "marlo.hello2" },
+    "marlo.hello2": { "speaker": "marlo", "text": "I'm Marlo. I fish, I ferry, I listen to the water. Your Tidler friend splashes like it knows me.", "choices": [ { "text": "Nice to meet you!", "next": "marlo.hello3" }, { "text": "Tides can talk?", "next": "marlo.hello3b" } ] },
+    "marlo.hello3b": { "speaker": "marlo", "text": "Only on Tuesdays. Today is... tidal.", "next": "marlo.hello3" },
+    "marlo.hello3": { "speaker": "marlo", "text": "The cove route will be open for you. Bring oranges. Tidlers go wild for them." },
+
+    "willa.hello": { "speaker": "willa", "text": "Shh. The berries are shy. So are the foxes. Walk softly.", "next": "willa.hello2" },
+    "willa.hello2": { "speaker": "willa", "text": "I'm Willa. I grow things and I listen to them. Your Sprigfox is wearing the happiest tail.", "choices": [ { "text": "Hi, Willa!", "next": "willa.hello3" }, { "text": "What do foxes eat?", "next": "willa.hello3b" } ] },
+    "willa.hello3b": { "speaker": "willa", "text": "Apples, mostly. And compliments. Sprigfoxes adore compliments.", "next": "willa.hello3" },
+    "willa.hello3": { "speaker": "willa", "text": "The Whisperwood path is yours now. Tiptoe, and the forest will tell you its secrets." },
+
+    "pip.s11": { "speaker": "pip", "text": "It's lit! The Glimmerlight is lit! Everybody to the green! There will be snacks. There are always snacks.", "next": "glim.1" },
+    "glim.1": { "speaker": "glim", "text": "Thank...", "next": "glim.2" },
+    "glim.2": { "speaker": "glim", "text": "you...", "next": "glim.3" },
+    "glim.3": { "speaker": "glim", "text": "Keeper.", "next": "glim.4" },
+    "glim.4": { "speaker": "glim", "text": "Light... home. Glimmers... dance.", "next": "pip.s11b" },
+    "pip.s11b": { "speaker": "pip", "text": "Well! That's the whole island done. Now it's yours, Keeper. Build, explore, make friends. We'll keep the lamps on." },
+
+    "pip.wish": { "speaker": "pip", "text": "I wrote you some Village Wishes. Decorate, make friends, fill the Glimmerdex. No rush. We have all the time in the world." },
+
+    "pip.pedestal.nocobble": { "speaker": "bram", "text": "The pedestal needs 10 cobble to stay put. Break some stone and press C to make cobble!" },
+    "pip.pedestal.nolens": { "speaker": "bram", "text": "Still missing a lens or two. They're napping somewhere: the pond, the forest, the highland." }
+  },
+  "idle": {
+    "pip": [
+      { "text": "Oh! A visitor! Well, a resident. Same paperwork." },
+      { "text": "I'm counting the cottages. There are still three. It's going well." },
+      { "text": "Good morning, Keeper! The Glimmers have been bouncing since sunrise.", "time": "day" },
+      { "text": "Lovely day for a log. Or six. I keep saying that." , "time": "day" },
+      { "text": "The sky looks like orange sherbet. I should write that down.", "time": "dusk" },
+      { "text": "Shh. The fireflies are signing in. They're very punctual.", "time": "night" },
+      { "text": "The village feels bigger already! Two more neighbours and I'll need a bigger clipboard.", "minLevel": 1 },
+      { "text": "Everyone is here! The village green has never been so loud. I love it.", "minLevel": 3 },
+      { "text": "The Glimmerlight is shining. My clipboard has never been this happy.", "minLevel": 4 }
+    ],
+    "bram": [
+      { "text": "Measure twice, cut once. Pun twice, regret once." },
+      { "text": "I just fixed a wall. It was a bit low. Now it's high-spirited." },
+      { "text": "Morning! Great day to put one block on top of another.", "time": "day" },
+      { "text": "Fun fact: bricks never tell secrets. They're very wall-ed off.", "time": "day" },
+      { "text": "Sunset on a good roof. That's the best view in the world.", "time": "dusk" },
+      { "text": "Quiet night. Even the hammer is dreaming.", "time": "night" },
+      { "text": "That pedestal's coming along. Stone-cold professional.", "minLevel": 2 },
+      { "text": "Best village I've built in. And the first. And the only. Still best.", "minLevel": 3 }
+    ],
+    "marlo": [
+      { "text": "The water's whispering again. Something about a sandwich." },
+      { "text": "Tides come, tides go. Snacks stay." },
+      { "text": "Today the sea is the colour of a sleepy blue crayon.", "time": "day" },
+      { "text": "A Tidler splashed my boots. I think it was a hello.", "time": "day" },
+      { "text": "Dusk is when the fish tell their best jokes.", "time": "dusk" },
+      { "text": "Moon on the water. That's the oldest lantern there is.", "time": "night" },
+      { "text": "Everyone's home safe. The tide approves.", "minLevel": 3 }
+    ],
+    "willa": [
+      { "text": "Shh. The ferns are listening." },
+      { "text": "Berries like to be asked nicely. Please and thank you work on most plants." },
+      { "text": "The dew is still on the clover. It tastes like the morning, I'm told.", "time": "day" },
+      { "text": "If you see a fox tail wag, say thank you. It's a compliment.", "time": "day" },
+      { "text": "Dusk is when the glowcaps wake up. Tiptoe. They're ticklish.", "time": "dusk" },
+      { "text": "Goodnight, little flowers. Goodnight, little foxes.", "time": "night" },
+      { "text": "The Glimmerlight is on! Even the moss is dancing.", "minLevel": 4 }
+    ]
+  }
+}

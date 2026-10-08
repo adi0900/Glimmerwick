@@ -1,0 +1,33 @@
+{
+  "_note": "NPC cast (docs/STORY.md). look = avatar palette colours; hat = voxel hat; home = where they hang out (dx,dz from the village centre, or a cottage index); arrival = village level at which they move in.",
+  "npcs": [
+    {
+      "id": "pip", "name": "Pip Tumblewick", "role": "Mayor",
+      "look": { "skin": "#FFD9BC", "hair": "#8A5A3B", "shirt": "#6CBF6A", "trim": "#FFF0D6", "pants": "#4F63A8", "boots": "#6B4A33", "pack": "#E9C46A", "pack2": "#C99A3E", "eyes": "#5A7A3A" },
+      "hat": { "kind": "tophat", "color": "#3F6FB8", "band": "#FFC94A" },
+      "home": { "dx": -1.5, "dz": 2.2 }, "wander": 2.4, "arrival": { "level": 0 },
+      "hello": "pip.s1", "tint": "#6CBF6A"
+    },
+    {
+      "id": "bram", "name": "Bram Brickle", "role": "Builder",
+      "look": { "skin": "#E9B58E", "hair": "#4A3A33", "shirt": "#E8913A", "trim": "#FFE7B0", "pants": "#6B6F7A", "boots": "#3A2E2A", "pack": "#B8452F", "pack2": "#8E3322", "eyes": "#3A2A20" },
+      "hat": { "kind": "cap", "color": "#FFC94A", "band": "#E8913A" },
+      "home": { "cottage": 1 }, "wander": 2.6, "arrival": { "level": 1 },
+      "hello": "bram.s6", "tint": "#E8913A"
+    },
+    {
+      "id": "marlo", "name": "Marlo Finn", "role": "Fisher",
+      "look": { "skin": "#C98A62", "hair": "#2F4A6E", "shirt": "#4FA8C8", "trim": "#FFFFFF", "pants": "#35507A", "boots": "#E8D9B0", "pack": "#D8A64A", "pack2": "#B07F2E", "eyes": "#2F5F7A" },
+      "hat": { "kind": "bucket", "color": "#F2E3B5", "band": "#4FA8C8" },
+      "home": { "cottage": 0 }, "wander": 3.0, "arrival": { "level": 2 },
+      "hello": "marlo.hello", "tint": "#4FA8C8"
+    },
+    {
+      "id": "willa", "name": "Willa Bloomsby", "role": "Gardener",
+      "look": { "skin": "#F3C7A6", "hair": "#B65A7A", "shirt": "#F29BB6", "trim": "#FFF5E0", "pants": "#7A9E5A", "boots": "#7A5A3A", "pack": "#8CCB6A", "pack2": "#5FA84A", "eyes": "#6A3A5A" },
+      "hat": { "kind": "sunhat", "color": "#F2D58A", "band": "#E26A8C" },
+      "home": { "cottage": 3 }, "wander": 2.2, "arrival": { "level": 3 },
+      "hello": "willa.hello", "tint": "#F29BB6"
+    }
+  ]
+}

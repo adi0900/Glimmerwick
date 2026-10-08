@@ -27,7 +27,7 @@ const LABEL = opt('--label', 'run');
 const CAM = opt('--cam', LABEL === 'after' ? 'rig' : 'old');
 const DT = 1 / 60;
 const SPEC = { walk: 4.317, sprint: 5.612, bunnyAvg: 7.127, apex: 1.2522, air: 0.6, sjDist: 3.629, stopSprint: 0.333 };
-const RIG = { omegaXZ: 10, omegaY: 6, lookAhead: 0.28, velTau: 0.12, head: 0.95 }; // mirror of rig.ts RIG_DEFAULTS
+const RIG = { omegaXZ: 10, omegaY: 6, lookAhead: 0.1, velTau: 0.12, head: 0.95 }; // mirror of rig.ts RIG_DEFAULTS
 
 const bridge = await import(pathToFileURL(path.join(pkgDir, 'bridge.js')).href);
 const { memory } = bridge.initSync({ module: readFileSync(path.join(pkgDir, 'bridge_bg.wasm')) });

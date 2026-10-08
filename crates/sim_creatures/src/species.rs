@@ -51,6 +51,8 @@ pub struct Species {
     pub brake: f32,
     /// Hard cap of the heading change rate (rad/s).
     pub turn_rate: f32,
+    /// Favourite treat item key (befriending bonus; matches the web item table).
+    pub favourite: &'static str,
 }
 
 /// Species ids.
@@ -73,6 +75,7 @@ pub const SPECIES: [Species; 3] = [
         accel: 3.5,
         brake: 4.0,
         turn_rate: 5.0,
+        favourite: "berry",
     },
     Species {
         name: "Tidler",
@@ -88,6 +91,7 @@ pub const SPECIES: [Species; 3] = [
         accel: 3.0,
         brake: 3.5,
         turn_rate: 4.2,
+        favourite: "orange",
     },
     Species {
         name: "Sprigfox",
@@ -103,6 +107,7 @@ pub const SPECIES: [Species; 3] = [
         accel: 6.0,
         brake: 6.0,
         turn_rate: 7.5,
+        favourite: "apple",
     },
 ];
 
