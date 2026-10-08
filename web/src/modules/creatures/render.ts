@@ -89,11 +89,12 @@ export class RigState {
   vLift = 0;
   glanceNext = 0;
   glanceUntil = 0;
+  sparkAt = 0;
   /** previous hop fraction / gait half-cycle (dust triggers) */
   pf = 0;
   pg = 0;
   private seed: number;
-  readonly sp: Spring[] = Array.from({ length: 14 }, () => new Spring());
+  readonly sp: Spring[] = Array.from({ length: 24 }, () => new Spring());
   constructor(id: number) {
     this.seed = (id * 2654435761) >>> 0 || 1;
     this.phase = this.rand() * 6.28;
@@ -178,12 +179,6 @@ const sstep = (a: number, b: number, v: number): number => {
 const TAU = Math.PI * 2;
 const wrapPi = (a: number): number => Math.atan2(sin(a), cos(a));
 
-function lid(pose: Float32Array, i: number, closed: number, squint: number): void {
-  const k = max(0.1, 1 - 0.9 * max(closed, squint));
-  pose[i * PS + SYI] = k;
-  pose[i * PS + SXI] = 1 + (1 - k) * 0.12;
-}
-
 function glowFor(A: AnimIn, R: RigState): number {
   const m = clamp(A.mood, 0, 1);
   const base = 0.38 + 0.62 * m;
@@ -244,7 +239,8 @@ const animPuffbun: Animator = (M, pose, A, R, o) => {
     tail = I.tail!,
     footR = I.footR!,
     footL = I.footL!,
-    eyes = I.eyes!;
+    tipR = I.earTipR!,
+    tipL = I.earTipL!;
   let sqT = mix(1 + 0.024 * sin(t * 2.2), h.sq, A.hopW);
   sqT = mix(sqT, 0.8 + 0.014 * sin(t * 1.3), A.wSleep);
   sqT = mix(sqT, 1.07 + 0.012 * sin(t * 9), A.wNotice);
@@ -267,6 +263,11 @@ const animPuffbun: Animator = (M, pose, A, R, o) => {
   pose[earL * PS + RX] = R.sp[1]!.step(tp, 150, 7, dt);
   pose[earR * PS + RZ] = -R.sp[2]!.step(out, 120, 6, dt);
   pose[earL * PS + RZ] = R.sp[3]!.step(out, 120, 6, dt);
+  // ear tips (the glowing 2-voxel caps): a softer, under-damped copy of the ear so the tip whips and settles after the ear
+  pose[tipR * PS + RX] = R.sp[14]!.step(tp * 0.5 - 0.35 * A.vLift, 85, 3.4, dt);
+  pose[tipL * PS + RX] = R.sp[15]!.step(tp * 0.5 - 0.35 * A.vLift, 85, 3.4, dt);
+  pose[tipR * PS + RZ] = -R.sp[16]!.step(0.1 * sin(t * 1.7) * (1 - A.wSleep) - A.yr * 0.05, 80, 3.2, dt);
+  pose[tipL * PS + RZ] = R.sp[17]!.step(0.1 * sin(t * 1.7 + 1.3) * (1 - A.wSleep) - A.yr * 0.05, 80, 3.2, dt);
   // tail: wag phase is integrated (frequency changes never pop), swings against turns
   const wagA = mix(0.14, 0.3, A.moveW);
   pose[tail * PS + RY] = R.sp[4]!.step(sin(R.tailPh) * wagA * (1 + A.playW) - A.yr * 0.06, 90, 7, dt);
@@ -274,7 +275,6 @@ const animPuffbun: Animator = (M, pose, A, R, o) => {
   const kick = (-0.8 * h.air + 0.35 * h.crouch) * A.hopW;
   pose[footR * PS + RX] = kick;
   pose[footL * PS + RX] = kick;
-  lid(pose, eyes, R.blink(A.t, dt, A.wSleep > 0.5), R.squint);
 };
 
 // ------------------------------------------------------------------------------------------------ Tidler
@@ -284,9 +284,10 @@ const animTidler: Animator = (M, pose, A, R, o) => {
   const dt = A.dt;
   const body = I.body!,
     head = I.head!,
-    eyes = I.eyes!,
     gR = I.gillR!,
     gL = I.gillL!,
+    gtR = I.gillTipR!,
+    gtL = I.gillTipL!,
     t1 = I.tail1!,
     t2 = I.tail2!,
     t3 = I.tail3!;
@@ -331,7 +332,12 @@ const animTidler: Animator = (M, pose, A, R, o) => {
   pose[gL * PS + RZ] = g1;
   pose[gR * PS + RY] = swim * 0.5 + (1 - swim) * 0.05 * sin(t * 2.7);
   pose[gL * PS + RY] = -swim * 0.5 - (1 - swim) * 0.05 * sin(t * 2.7 + 1);
-  lid(pose, eyes, R.blink(A.t, dt, A.wSleep > 0.5), R.squint);
+  // glowing frond tips trail the fronds (soft under-damped springs)
+  const fl = 0.35 * flare;
+  pose[gtR * PS + RZ] = -R.sp[14]!.step(fl + (swim > 0.5 ? 0.12 * sin(t * 6 - 0.8) : 0.09 * sin(t * 4.3 + 0.6)), 80, 3.0, dt);
+  pose[gtL * PS + RZ] = R.sp[15]!.step(fl + (swim > 0.5 ? 0.12 * sin(t * 6 + 0.2) : 0.09 * sin(t * 4.3 - 0.4)), 80, 3.0, dt);
+  pose[gtR * PS + RY] = R.sp[16]!.step(0.1 * sin(t * 2.1) - A.yr * 0.04, 70, 3.0, dt);
+  pose[gtL * PS + RY] = -R.sp[17]!.step(0.1 * sin(t * 2.1 + 1) - A.yr * 0.04, 70, 3.0, dt);
 };
 
 // ------------------------------------------------------------------------------------------------ Sprigfox
@@ -341,12 +347,14 @@ const animSprigfox: Animator = (M, pose, A, R, o) => {
   const dt = A.dt;
   const body = I.body!,
     head = I.head!,
-    eyes = I.eyes!,
     earR = I.earR!,
     earL = I.earL!,
+    tipR = I.earTipR!,
+    tipL = I.earTipL!,
     sprout = I.sprout!,
     t1 = I.tail1!,
-    t2 = I.tail2!;
+    t2 = I.tail2!,
+    t3 = I.tail3!;
   const fr = I.legFR!,
     fl = I.legFL!,
     br = I.legBR!,
@@ -398,10 +406,16 @@ const animSprigfox: Animator = (M, pose, A, R, o) => {
   pose[earL * PS + RX] = R.sp[1]!.step(tp, 160, 8, dt);
   pose[earR * PS + RZ] = -R.sp[2]!.step(out, 120, 6, dt);
   pose[earL * PS + RZ] = R.sp[3]!.step(out, 120, 6, dt);
+  pose[tipR * PS + RX] = R.sp[14]!.step(tp * 0.45 - 0.3 * A.vLift, 90, 3.6, dt);
+  pose[tipL * PS + RX] = R.sp[15]!.step(tp * 0.45 - 0.3 * A.vLift, 90, 3.6, dt);
+  pose[tipR * PS + RZ] = -R.sp[16]!.step(0.08 * sin(t * 2.2), 80, 3.2, dt);
+  pose[tipL * PS + RZ] = R.sp[17]!.step(0.08 * sin(t * 2.2 + 1.1), 80, 3.2, dt);
+  // plume tip: a third, even softer link in the tail chain
+  pose[t3 * PS + RY] = R.sp[18]!.step(ty * 0.7 + 0.14 * sin(t * 2.9 - 0.9) - A.yr * 0.05, 38, 2.6, dt);
+  pose[t3 * PS + RX] = R.sp[19]!.step(tailLift * 0.4 - 0.1 * A.vLift + 0.05 * sin(t * 2.3), 36, 2.6, dt);
   const wob = R.sp[7]!.step(0.1 * sin(t * 2.4) + A.moveW * 0.12 * sin(t * 9), 120, 4, dt);
   pose[sprout * PS + RZ] = wob;
   pose[sprout * PS + RX] = -0.1 - o.lift * 2;
-  lid(pose, eyes, R.blink(A.t, dt, slp > 0.5), R.squint);
 };
 
 const ANIMATORS: Animator[] = [animPuffbun, animTidler, animSprigfox];
@@ -640,7 +654,10 @@ export class CreatureRenderer {
     // vertical velocity of the hop (m/s, normalised) for next frame's ear follow-through
     if (dt > 0) R.vLift += (clamp((O.lift - R.lastLift) / dt / 1.6, -1.5, 1.5) - R.vLift) * (1 - Math.exp(-18 * dt));
     R.lastLift = O.lift;
-    const sq = max(0.3, O.sq);
+    // squash / stretch lands on whole voxels of body height (sprite-style steps: the idle breath is a 1-voxel bob)
+    const Mo = this.models[sp]!;
+    const hv = Mo.height / Mo.vs;
+    const sq = max(0.3, Math.round(O.sq * hv) / hv);
     const sxz = 1 / Math.sqrt(sq);
     _q.setFromAxisAngle(_up, R.vyaw);
     _p.set(r.x, r.y + O.lift * r.scale, r.z);
@@ -648,7 +665,15 @@ export class CreatureRenderer {
     _root.compose(_p, _q, _s);
     composeRig(this.models[sp]!, _root, pose, inst, slot);
     const vr = Math.max(0, Math.min(2, r.variant | 0));
-    inst.setAttr(slot, vr, O.glow);
+    // expression frame (authored face sprites): sleep > blink > surprised (notice) > happy (play / emote) > neutral
+    const closed = R.blink(A.t, dt, R.wSleep > 0.5);
+    const face = R.wSleep > 0.5 ? 3 : closed > 0.5 ? 1 : R.wNotice > 0.5 ? 4 : R.playW > 0.5 || r.emote > 0 ? 2 : 0;
+    inst.setAttr(slot, vr, O.glow, face);
+    // happy sparkles: a few tiny voxels pop off a playing creature's head every ~0.5 s
+    if (dt > 0 && d2 < 30 * 30 && R.playW > 0.5 && this.t >= R.sparkAt) {
+      R.sparkAt = this.t + 0.4 + R.rand() * 0.3;
+      this.fx.puff(r.x, r.y + 0.62 * r.scale, r.z, 3, 0.07 * r.scale, 0.55);
+    }
     // --- life FX: landing + run-step dust (near the camera only), coloured ground spill under glow markings at night
     if (dt > 0 && d2 < 42 * 42 && r.state !== 4) {
       const f = R.hop - Math.floor(R.hop);

@@ -1,467 +1,1506 @@
 /**
- * The three hero Glimmer species + the chibi explorer avatar, sculpted procedurally (original designs).
+ * The three hero Glimmer species + the chibi explorer avatar as AUTHORED voxel art (original designs).
+ * Every model is explicit voxel data (see ./voxdata.ts for the slice format): front-view depth slices per part, a palette
+ * legend with hue-shifted tone ramps, face sprites per expression frame. No primitives, no random speckle.
+ * The bulk volumes were blocked out with a chamfered-box helper and then frozen into text and edited by hand
+ * (ears, tails, gills, plumes, feet, faces and glow marks are drawn directly).
  *
- *  Puffbun  -- tall round "mochi" body, cheek puffs, very long ears with glowing tips + a crown star, cotton tail.
- *  Tidler   -- low axolotl-like tide-dweller: wide grin, three round gill fronds per side with glowing tips, ONE tapering
- *              3-step back crest, a short tail ending in a round fin.
- *  Sprigfox -- compact fox: two clean cone ears, ONE forehead sprout, a three-tier leaf plume tail curling in an S.
+ *  Puffbun  -- tall mochi body, cheek puffs, very long ears with glowing tips, cotton tail.
+ *  Tidler   -- low axolotl-like tide-dweller: wide grin, three gill fronds per side with glowing tips, glowing dorsal crest,
+ *              a tail ending in a vertical paddle fin with a glowing emblem.
+ *  Sprigfox -- compact fox: stair-step ears with dark tips, a leafy forehead sprout, a two-tier leaf-plume tail in an S.
+ *  Explorer -- 2.3-head chibi: hair cap + ponytail, 2x3 eyes, trim, backpack with a glow strap.
  *
- * All faces share ONE language (EYE_R / EYE_L + the mouths below): a 5x5 voxel eye (dark lash line on the top + OUTER edge
- * only, iris in two tones of one hue, a 2x2 + a 1x1 white highlight, never a black pit) and a friendly up-turned mouth.
- * Palette slots are model-specific (see each table); variants are palette rows chosen per instance.
+ * Voxel scale: each model's `vs` is chosen so a voxel is ~3-5 cm in the world at the species' sim scale (the world's
+ * texel-voxels are 4 cm), i.e. chunky enough to read as pixel art. Faces: 2x3 eyes (ink / white highlight / iris), cheek
+ * marks, tiny mouths, frames 0 neutral, 1 blink, 2 happy, 3 sleep, 4 surprised (see FACE_FRAMES).
  */
 import type { ModelDef } from './actors';
-import { P, type Paint, type PaintCtx, type Sculpt, type V3 } from './sculpt';
+import { P } from './sculpt';
+import { authorModel, ramp3, ramp5, tint, type FaceDef, type Legend, type VoxPart } from './voxdata';
 
-// ------------------------------------------------------------------------------------------------ shared face language
-/** O lash line (top + outer edge only) . I iris . i iris +30 % lighter (bottom row, same hue) . W 2x2 highlight . w 1x1 highlight */
-const EYE_R = ['.OOO.', 'IWWIO', 'IWWIO', 'IIIwO', '.iii.'];
-const EYE_L = ['.OOO.', 'OWWII', 'OWWII', 'OIIwI', '.iii.'];
-const SMILE6 = ['M....M', '.MMMM.'];
-const SMILE8 = ['M......M', '.MMMMMM.'];
-/** the little cat "w" */
-const OMEGA6 = ['M.MM.M', '.M..M.'];
-
-interface EyeInk {
-  line: number;
-  iris: number;
-  white: number;
-  /** bottom-row brightening of the iris (same hue), default 1.3 */
-  lift?: number;
-  /** soft-pupil style (no dark frame): the whole eye is this slot x pupilH, only the bottom row shows the iris */
-  pupil?: number;
-  pupilH?: number;
-  /** custom right / left eye patterns (same legend); default EYE_R / EYE_L */
-  rows?: [string[], string[]];
-  /** 'L' cells: a soft lid row (e.g. skin x 0.85) */
-  lid?: Paint;
-}
-
-/** stamp both eyes into part eyes: the right eye covers cells xr.. (viewer right), the left one is its mirror */
-function eyes(s: Sculpt, head: string, xr: number, yTop: number, ink: EyeInk): void {
-  const pu = ink.pupil;
-  const ph = ink.pupilH ?? 1;
-  const lg: Record<string, Paint> = {
-    O: pu !== undefined ? P(pu, ph, -0.04) : P(ink.line),
-    I: pu !== undefined ? P(pu, ph, -0.08) : P(ink.iris, 1, -0.14),
-    i: P(ink.iris, ink.lift ?? 1.3, -0.24),
-    W: P(ink.white, 1.0, -0.28),
-    w: P(ink.white, 0.95, -0.18),
-    L: ink.lid ?? P(ink.line),
-  };
-  const R = ink.rows?.[0] ?? EYE_R;
-  const L = ink.rows?.[1] ?? EYE_L;
-  const w = R[0]!.length;
-  s.decal({ on: head, into: 'eyes', x: xr, y: yTop, rows: R, legend: lg });
-  s.decal({ on: head, into: 'eyes', x: -xr - w, y: yTop, rows: L, legend: lg });
-}
-
-/** centred (symmetric) mouth pattern; rows[0] is the top row at height y */
-function mouth(s: Sculpt, head: string, rows: string[], y: number, col: Paint): void {
-  s.decal({ on: head, x: -rows[0]!.length / 2, y, rows, legend: { M: col } });
-}
-
-/** a 2x2 cheek blush pair, right one at cells xr..xr+1 */
-function blush(s: Sculpt, head: string, xr: number, y: number, col: Paint): void {
-  s.decal({ on: head, x: xr, y, rows: ['BB', 'BB'], legend: { B: col } });
-  s.decal({ on: head, x: -xr - 2, y, rows: ['BB', 'BB'], legend: { B: col } });
-}
-
-/** avatar eye: 4x4 dark-brown oval, 2x1 highlight upper-left, a lighter iris crescent at the bottom (no white frame) */
-const AV_EYE = ['LLL', 'IWI', 'III', '.i.'];
-const SMILE4 = ['M..M', '.MM.'];
-/** Tidler: white sclera with a centred 2x3 dark pupil (friendly, never a black pit) */
-const EYE_TID = ['.WW.', 'WIIW', 'WIIW', 'WIiW', '.WW.'];
-/** Sprigfox: green iris ring, dark 2x3 pupil with a white highlight */
-const EYE_FOX = ['.II.', 'IWOI', 'IOOI', 'IOOI', '.ii.'];
-/** Tidler grin: 8 wide, corners lifted two rows */
-const SMILE_T = ['M......M', '.M....M.', '..MMMM..'];
-
-const N6: V3[] = [
-  [1, 0, 0],
-  [-1, 0, 0],
-  [0, 1, 0],
-  [0, -1, 0],
-  [0, 0, 1],
-  [0, 0, -1],
-];
-
-/**
- * Orphan-voxel cleanup (run after the primitives, BEFORE the designed decals / markings): a non-glowing voxel with fewer than
- * two same-colour neighbours whose other neighbours agree on one colour takes that colour. Kills rule-painting speckle.
- */
-function despeckle(s: Sculpt, passes = 2): void {
-  for (let pass = 0; pass < passes; pass++) {
-    const B = s.bounds();
-    const ups: { part: string; x: number; y: number; z: number; slot: number; h: number }[] = [];
-    for (let x = B.min[0]; x <= B.max[0]; x++)
-      for (let y = B.min[1]; y <= B.max[1]; y++)
-        for (let z = B.min[2]; z <= B.max[2]; z++) {
-          const v = s.get(x, y, z);
-          if (!v || v.e !== 0) continue;
-          let same = 0;
-          let tot = 0;
-          const seen = new Map<number, { n: number; h: number }>();
-          for (const d of N6) {
-            const w = s.get(x + d[0], y + d[1], z + d[2]);
-            if (!w || w.part !== v.part) continue;
-            tot++;
-            if (w.s === v.s) same++;
-            else if (w.e === 0) {
-              const r = seen.get(w.s);
-              if (r) r.n++;
-              else seen.set(w.s, { n: 1, h: w.h });
-            }
-          }
-          if (same >= 2 || tot < 4) continue;
-          let best = -1;
-          let bn = 0;
-          let bh = 1;
-          for (const [slot, r] of seen)
-            if (r.n > bn) {
-              best = slot;
-              bn = r.n;
-              bh = r.h;
-            }
-          if (best >= 0 && bn >= 3) ups.push({ part: s.names[v.part]!, x, y, z, slot: best, h: bh });
-        }
-    if (ups.length === 0) return;
-    for (const u of ups) s.put(u.part, u.x, u.y, u.z, P(u.slot, u.h));
-  }
-}
-
-/** stack `h` voxels of `part` on whatever is highest in column (x, z) */
-function stackOn(s: Sculpt, part: string, x: number, z: number, h: number, paint: (k: number) => Paint): void {
-  const B = s.bounds();
-  for (let y = B.max[1]; y >= B.min[1]; y--) {
-    if (s.get(x, y, z)) {
-      for (let k = 0; k < h; k++) s.put(part, x, y + 1 + k, z, paint(k));
-      return;
-    }
-  }
-}
+const F5 = (a: number): number[] => [a, a + 1, a + 2, a + 3, a + 4];
 
 // ------------------------------------------------------------------------------------------------ Puffbun
-const PB = { FUR: 0, LIGHT: 1, PINK: 2, GLOW: 3, DARK: 4, IRIS: 5, WHITE: 6, NOSE: 7, TAIL: 8, PAD: 9, FUR2: 10 };
+/** slots: 0-4 fur ramp . 5-9 cream ramp . 10-12 pink ramp . 13 glow . 14 glow core . 15 ink . 16 iris . 17 iris light . 18 white . 19 nose */
+const PB = { FUR: 0, CREAM: 5, PINK: 10, GLOW: 13, CORE: 14, INK: 15, IRIS: 16, IRIS2: 17, WHITE: 18, NOSE: 19 };
 
-function buildPuffbun(s: Sculpt): void {
-  const { FUR, LIGHT, PINK, GLOW, DARK, IRIS, WHITE, NOSE, TAIL, PAD } = PB;
-  s.ellipsoid('body', [0, 8.2, -0.5], [8.2, 8.0, 8.4], P(FUR), { n: 2.3 });
-  for (const sx of [1, -1]) s.ellipsoid('body', [sx * 5.9, 8.0, 6.4], [2.0, 2.6, 2.1], P(FUR));
-  s.recolor(['body'], (c) => {
-    const bx = c.x / 5.6,
-      by = (c.y - 6.3) / 6.2;
-    return c.nz > 0.2 && c.z > 0 && bx * bx + by * by < 1 ? P(LIGHT) : null;
-  });
-
-  s.ellipsoid('head', [0, 17.6, 1.4], [8.3, 6.9, 7.5], P(FUR), { n: 2.3 });
-  for (const sx of [1, -1]) s.ellipsoid('head', [sx * 8.0, 15.4, 2.4], [2.6, 2.5, 3.0], P(LIGHT));
-  s.recolor(['head'], (c) => (c.nz > 0.3 && c.y < 15.4 && Math.abs(c.x) < 4.4 && c.z > 3.5 ? P(LIGHT) : null));
-
-  // ears: very long, flat, rounded tips that glow, ONE clean pink inner panel (front layer, centre 60 %)
-  const ear = (c: PaintCtx): Paint => (c.y > 32.4 ? P(GLOW, 1, 0.9) : c.ly > 0.2 && Math.abs(c.lx) < 0.62 ? P(PINK, 1.04) : P(FUR));
-  for (const sx of [1, -1]) {
-    const part = sx > 0 ? 'earR' : 'earL';
-    s.taper(part, [sx * 4.7, 20.5, 0.8], [sx * 6.6, 34.4, -1.0], 3.2, 2.3, ear, { flat: 0.5 });
-    s.ellipsoid(part, [sx * 6.6, 34.4, -1.0], [2.3, 2.1, 1.2], ear);
-  }
-
-  // cotton tail
-  s.ellipsoid('tail', [0, 6.4, -9.8], [3.3, 3.3, 3.3], P(TAIL));
-  s.ellipsoid('tail', [1.6, 7.9, -10.4], [2.2, 2.2, 2.2], P(TAIL));
-  s.ellipsoid('tail', [-1.7, 5.2, -10.6], [2.1, 2.1, 2.1], P(TAIL));
-
-  // hind feet
-  for (const sx of [1, -1]) s.ellipsoid(sx > 0 ? 'footR' : 'footL', [sx * 4.4, 1.5, 4.6], [3.0, 1.6, 4.2], P(FUR));
-
-  despeckle(s);
-
-  // face: shared eye + little nose + cat 'w' mouth, glowing cheek sparks, crown star, toe beans
-  eyes(s, 'head', 2, 19, { line: DARK, iris: IRIS, white: WHITE });
-  s.decal({ on: 'head', x: -1, y: 14, rows: ['NN'], legend: { N: P(NOSE, 1, 0.1) } });
-  mouth(s, 'head', OMEGA6, 13, P(DARK));
-  const spark = ['.G.', 'GAG', '.G.'];
-  const cl = { A: P(PINK, 1.05), G: P(GLOW, 1, 0.9) };
-  s.decal({ on: 'head', x: 5, y: 13, rows: spark, legend: cl });
-  s.decal({ on: 'head', x: -8, y: 13, rows: spark, legend: cl });
-  s.decal({ on: 'head', dir: '+y', x: -2, y: 3, rows: ['.GG.', 'GGGG', '.GG.'], legend: { G: P(GLOW, 1, 0.95) } });
-  for (const sx of [1, -1]) s.decal({ on: sx > 0 ? 'footR' : 'footL', x: sx > 0 ? 3 : -5, y: 1, rows: ['PP'], legend: { P: P(PAD) } });
+function puffPal(fur: string, cream: string, pink: string, glow: string, ink: string, iris: string, nose: string): string[] {
+  return [...ramp5(fur), ...ramp5(cream), ...ramp3(pink), glow, tint(glow, 0.22), ink, iris, tint(iris, 0.2), '#FFF8EC', nose];
 }
+
+const PB_LEGEND: Legend = {
+  f: { ramp: F5(PB.FUR) },
+  c: { ramp: F5(PB.CREAM) },
+  C: { ramp: F5(PB.CREAM), dither: false },
+  p: P(PB.PINK + 1),
+  q: P(PB.PINK + 2),
+  r: P(PB.PINK),
+  d: P(PB.FUR),
+  G: P(PB.GLOW, 1, 0.9),
+  g: P(PB.CORE, 1, 1),
+};
+
+const PB_PARTS: VoxPart[] = [
+  { part: 'body', mirror: true, y: 8, z: 4, text: `
+......
+ccfff.
+cccff.
+ccccf.
+ccccf.
+ccccf.
+cccff.
+......
+-
+fff...
+ccfff.
+cccfff
+ccccff
+ccccff
+ccccff
+cccff.
+cff...
+-
+fff...
+ccfff.
+cccfff
+ccccff
+ccccff
+ccccff
+cccff.
+cff...
+-
+fff...
+fffff.
+ffffff
+ffffff
+ffffff
+ffffff
+fffff.
+fff...
+-
+fff...
+fffff.
+ffffff
+ffffff
+ffffff
+ffffff
+fffff.
+fff...
+-
+fff...
+fffff.
+ffffff
+ffffff
+ffffff
+ffffff
+fffff.
+fff...
+-
+fff...
+fffff.
+ffffff
+ffffff
+ffffff
+ffffff
+fffff.
+fff...
+-
+fff...
+fffff.
+ffffff
+ffffff
+ffffff
+ffffff
+fffff.
+fff...
+-
+......
+fffff.
+fffff.
+fffff.
+fffff.
+fffff.
+fffff.
+......
+` },
+  { part: 'head', mirror: true, y: 17, z: 4, text: `
+......
+fffff.
+fffff.
+fffff.
+fffff.
+fffff.
+fffff.
+cccff.
+......
+-
+fff...
+fffff.
+ffffff
+ffffff
+ffffff
+ffffff
+ffffff
+cccff.
+ccc...
+-
+fff...
+fffff.
+ffffff
+ffffff
+ffffff
+ffffff
+ffffff
+cccff.
+ccc...
+-
+fff...
+fffff.
+ffffff
+ffffff
+ffffff
+ffffff
+ffffff
+fffff.
+fff...
+-
+Gff...
+fffff.
+ffffff
+ffffff
+ffffff
+ffffff
+ffffff
+fffff.
+fff...
+-
+fff...
+fffff.
+ffffff
+ffffff
+ffffff
+ffffff
+ffffff
+fffff.
+fff...
+-
+fff...
+fffff.
+ffffff
+ffffff
+ffffff
+ffffff
+ffffff
+fffff.
+fff...
+-
+fff...
+fffff.
+ffffff
+ffffff
+ffffff
+ffffff
+ffffff
+fffff.
+fff...
+` },
+  // cheek puffs: a 3x3x3 plus-shaped nub on each side of the head
+  { part: 'head', mirror: true, x: 6, y: 13, z: 3, text: `
+.
+c
+.
+-
+c
+c
+c
+-
+.
+c
+.
+` },
+  // ears: 3 wide, pink panel on the front slice, rounded fur edge
+  { part: 'earR', mirror: 'earL', x: 2, y: 21, z: 1, text: `
+fpf
+fpf
+fpf
+fpf
+-
+fff
+fff
+fff
+fff
+` },
+  { part: 'earTipR', mirror: 'earTipL', x: 2, y: 23, z: 1, text: `
+.G.
+GgG
+-
+.G.
+GGG
+` },
+  // cotton tail: 4x4x4, chamfered, cream
+  { part: 'tail', mirror: true, y: 6, z: -5, text: `
+..
+C.
+C.
+..
+-
+C.
+CC
+CC
+C.
+-
+=
+-
+..
+C.
+C.
+..
+` },
+  // hind feet with a pink toe bean on the front
+  { part: 'footR', mirror: 'footL', x: 1, y: 1, z: 3, text: `
+ccc
+cpc
+-
+ccc
+ccc
+-
+=
+` },
+];
+
+const PB_FACE: FaceDef = {
+  on: 'head',
+  x: -6,
+  y: 16,
+  legend: { k: P(PB.INK), w: P(PB.WHITE, 1, -0.25), I: P(PB.IRIS, 1, -0.1), i: P(PB.IRIS2, 1, -0.2), b: P(PB.PINK + 2), n: P(PB.NOSE, 1, 0.1), m: P(PB.INK), r: P(PB.PINK + 1), l: P(PB.FUR + 1) },
+  frames: {
+    0: `
+............
+..kk....kk..
+..wk....wk..
+..II....II..
+bb...nn...bb
+....m..m....
+.....mm.....`,
+    1: `
+............
+............
+..kk....kk..
+............
+==...==...==
+....=..=....
+.....==.....`,
+    2: `
+............
+............
+...k....k...
+..k.k..k.k..
+==...==...==
+....mmmm....
+.....rr.....`,
+    3: `
+............
+............
+..ll....ll..
+..kk....kk..
+==...==...==
+.....mm.....
+............`,
+    4: `
+............
+..kk....kk..
+..wk....wk..
+..kk....kk..
+==II.==.II==
+.....mm.....
+.....mm.....`,
+  },
+};
 
 export const PUFFBUN: ModelDef = {
   name: 'puffbun',
-  vs: 0.03,
+  vs: 0.045,
   parts: [
-    { name: 'body', parent: null, pivot: [0, 8, -0.5] },
-    { name: 'head', parent: 'body', pivot: [0, 14, 1] },
-    { name: 'eyes', parent: 'head', pivot: [0, 17.5, 8.5] },
-    { name: 'earR', parent: 'head', pivot: [4.7, 20.5, 0.8] },
-    { name: 'earL', parent: 'head', pivot: [-4.7, 20.5, 0.8] },
-    { name: 'tail', parent: 'body', pivot: [0, 6.4, -8.5] },
-    { name: 'footR', parent: 'body', pivot: [4.4, 2.6, 2.5] },
-    { name: 'footL', parent: 'body', pivot: [-4.4, 2.6, 2.5] },
+    { name: 'body', parent: null, pivot: [0, 5, 0] },
+    { name: 'head', parent: 'body', pivot: [0, 10, 0.5] },
+    { name: 'earR', parent: 'head', pivot: [3.5, 18, 1] },
+    { name: 'earL', parent: 'head', pivot: [-3.5, 18, 1] },
+    { name: 'earTipR', parent: 'earR', pivot: [3.5, 22, 1] },
+    { name: 'earTipL', parent: 'earL', pivot: [-3.5, 22, 1] },
+    { name: 'tail', parent: 'body', pivot: [0, 4.5, -4.5] },
+    { name: 'footR', parent: 'body', pivot: [2.5, 2, 2] },
+    { name: 'footL', parent: 'body', pivot: [-2.5, 2, 2] },
   ],
   palettes: [
-    ['#FFC7DB', '#FFF8F0', '#FF9CC0', '#FFD84A', '#2B1A3A', '#6A32A8', '#FFFFFF', '#E8507A', '#FFFFFF', '#FF9DBB', '#F2A9C2'],
-    ['#C9B9FF', '#F6F2FF', '#9A7EF5', '#5CF2FF', '#241A45', '#4636B8', '#FFFFFF', '#7A5CE0', '#FFFFFF', '#A58FF5', '#AE98F2'],
-    ['#B6EDC9', '#F6FFF2', '#62D69C', '#FF8AD4', '#1C3A33', '#1E8C6A', '#FFFFFF', '#3FB67E', '#FFFFFF', '#8EDDB0', '#98DCB2'],
+    puffPal('#FFB6D0', '#FFF1E4', '#FF8FB6', '#FFD84A', '#3A2150', '#8A46D0', '#E8507A'),
+    puffPal('#B9A6FF', '#F3EEFF', '#8F72F0', '#5CF2FF', '#271B4D', '#3F52E0', '#7A5CE0'),
+    puffPal('#A4E6BC', '#F3FFEA', '#52CF92', '#FF8AD4', '#1E3B34', '#1E9C74', '#3FB67E'),
   ],
-  build: buildPuffbun,
+  build: (s) => authorModel(s, PB_PARTS, PB_LEGEND, [PB_FACE]),
 };
 
 // ------------------------------------------------------------------------------------------------ Tidler
-const TD = { MAIN: 0, BELLY: 1, CORAL: 2, GLOW: 3, DARK: 4, IRIS: 5, WHITE: 6, MOUTH: 7, FIN: 8, PAD: 9, PUPIL: 10 };
+/** slots: 0-4 main ramp . 5-9 cream ramp . 10-14 coral ramp . 15-19 fin ramp . 20 glow . 21 glow core . 22 ink . 23 white . 24 iris . 25 iris light . 26 mouth */
+const TD = { MAIN: 0, CREAM: 5, CORAL: 10, FIN: 15, GLOW: 20, CORE: 21, INK: 22, WHITE: 23, IRIS: 24, IRIS2: 25, MOUTH: 26 };
 
-/** ONE iconic idea: a fat round tail fin that curls up behind the body (3 swaying segments), plus two small side gills. */
-function buildTidler(s: Sculpt): void {
-  const { MAIN, BELLY, CORAL, GLOW, IRIS, WHITE, MOUTH, FIN, PAD, PUPIL } = TD;
-  s.ellipsoid('body', [0, 6.8, -3.5], [6.9, 5.2, 10.5], P(MAIN), { n: 2.2 });
-  s.recolor(['body'], (c) => (c.ny < -0.25 || c.y < 4.2 ? P(BELLY) : null));
-
-  // head: one soft ellipsoid; only the chin underside is cream (so the mouth sits on the main colour)
-  s.ellipsoid('head', [0, 9.4, 8.0], [7.5, 6.6, 6.0], P(MAIN), { n: 2.1 });
-  s.recolor(['head'], (c) => (c.ny < -0.7 && c.y < 4.2 ? P(BELLY) : null));
-
-  // gills: two round tapering fronds per side, glowing only at the very tip
-  const gillPaint = (c: PaintCtx): Paint => (c.t > 0.8 ? P(GLOW, 1, 0.85) : P(CORAL));
-  for (const sx of [1, -1]) {
-    const part = sx > 0 ? 'gillR' : 'gillL';
-    const base: V3 = [sx * 6.4, 10.6, 6.0];
-    s.taper(part, base, [sx * 12.2, 15.6, 4.2], 2.7, 1.2, gillPaint, { flat: 0.85 });
-    s.taper(part, base, [sx * 13.4, 10.2, 4.0], 2.7, 1.2, gillPaint, { flat: 0.85 });
-  }
-
-  // stubby legs
-  for (const sx of [1, -1]) {
-    const n = sx > 0 ? 'R' : 'L';
-    s.capsule(`legF${n}`, [sx * 5.0, 5.2, 4.0], [sx * 6.0, 0.9, 4.8], 2.4, 2.0, P(MAIN));
-    s.ellipsoid(`legF${n}`, [sx * 6.0, 0.9, 5.8], [2.2, 0.9, 2.6], P(PAD));
-    s.capsule(`legB${n}`, [sx * 5.0, 5.2, -8.5], [sx * 6.0, 0.9, -7.8], 2.6, 2.1, P(MAIN));
-    s.ellipsoid(`legB${n}`, [sx * 6.0, 0.9, -6.8], [2.5, 1.0, 3.0], P(PAD));
-  }
-
-  // tail: three segments curling up, ending in a big round fin with a coral rim + glowing emblem
-  const under = (c: { ny: number }): Paint | null => (c.ny < -0.35 ? P(BELLY) : null);
-  s.capsule('tail1', [0, 7.0, -11.0], [0, 7.6, -16.5], 3.9, 3.1, P(MAIN));
-  s.recolor(['tail1'], under);
-  s.capsule('tail2', [0, 7.6, -16.5], [0, 10.8, -20.2], 3.1, 2.5, P(MAIN));
-  s.recolor(['tail2'], under);
-  s.capsule('tail3', [0, 10.8, -20.2], [0, 15.4, -20.2], 2.4, 1.7, P(MAIN));
-  s.ellipsoid('tail3', [0, 18.8, -17.6], [3.0, 3.4, 3.7], (c) => (c.r > 0.86 ? P(CORAL) : P(FIN)), { n: 2.2 });
-  s.decal({ on: 'tail3', dir: '+x', x: -16, y: 19, rows: ['GG', 'GG'], legend: { G: P(GLOW, 1, 0.85) } });
-  s.decal({ on: 'tail3', dir: '-x', x: -18, y: 18, rows: ['GG', 'GG'], legend: { G: P(GLOW, 1, 0.85) } });
-
-  // dorsal crest: one low tapering ridge (3 -> 2 -> 1), glowing cap every 4th step
-  for (let z = 1; z >= -10; z--) {
-    const h = z > -2 ? 3 : z > -6 ? 2 : 1;
-    const cap = (((z % 4) + 4) % 4) === 1;
-    for (const x of [-1, 0]) stackOn(s, 'body', x, z, h, (k) => (k === h - 1 && cap ? P(GLOW, 1, 0.85) : P(CORAL)));
-  }
-
-  despeckle(s);
-
-  // face: soft pupils (no frame), small 6-voxel smile on the main colour, cheek blushes beside the mouth
-  eyes(s, 'head', 2, 12, { line: PUPIL, iris: PUPIL, white: WHITE, lift: 1.0, rows: [EYE_TID, EYE_TID] });
-  mouth(s, 'head', SMILE_T, 7, P(MOUTH));
-  blush(s, 'head', 5, 8, P(CORAL, 1.05));
-
-  // glowing markings (designed shapes, >= 2 voxels)
-  for (const [x, z] of [
-    [3, -8],
-    [-4, -8],
-    [3, -3],
-    [-4, -3],
-    [2, 1],
-    [-3, 1],
-  ] as const)
-    for (let dx = 0; dx < 2; dx++) s.topCell('body', x + dx, z, P(GLOW, 1, 0.85));
-  for (const [x, z] of [
-    [3, 6],
-    [-5, 6],
-  ] as const)
-    for (let dx = 0; dx < 2; dx++) s.topCell('head', x + dx, z, P(GLOW, 1, 0.85));
+function tidPal(main: string, cream: string, coral: string, fin: string, glow: string, ink: string, iris: string, mouth: string): string[] {
+  return [...ramp5(main), ...ramp5(cream), ...ramp5(coral), ...ramp5(fin), glow, tint(glow, 0.2), ink, '#FFF8EC', iris, tint(iris, 0.2), mouth];
 }
+
+const TD_LEGEND: Legend = {
+  f: { ramp: F5(TD.MAIN) },
+  c: { ramp: F5(TD.CREAM) },
+  r: { ramp: F5(TD.CORAL), dither: false },
+  e: { ramp: F5(TD.FIN), dither: false },
+  G: P(TD.GLOW, 1, 0.85),
+  g: P(TD.CORE, 1, 1),
+};
+
+const TD_PARTS: VoxPart[] = [
+  { part: 'body', mirror: true, y: 7, z: 4, text: `
+.....
+ffff.
+ffff.
+ffff.
+ffff.
+.....
+-
+fff..
+fffff
+fffff
+fffff
+fffff
+ccc..
+-
+fff..
+fffff
+fffff
+fffff
+fffff
+ccc..
+-
+fff..
+fffff
+fffff
+fffff
+fffff
+ccc..
+-
+fff..
+fffff
+fffff
+fffff
+fffff
+ccc..
+-
+fff..
+fffff
+fffff
+fffff
+fffff
+ccc..
+-
+fff..
+fffff
+fffff
+fffff
+fffff
+ccc..
+-
+fff..
+fffff
+fffff
+fffff
+fffff
+ccc..
+-
+.....
+ffff.
+ffff.
+ffff.
+ffff.
+.....
+` },
+  // dorsal crest: 2 wide, 2 tall at the shoulders tapering to 1, a glowing cap on every third step
+  { part: 'body', mirror: true, y: 9, z: 3, text: `
+.
+r
+-
+G
+r
+-
+r
+r
+-
+r
+r
+-
+.
+G
+-
+.
+r
+-
+.
+G
+` },
+  { part: 'head', mirror: true, y: 8, z: 11, text: `
+.......
+fffff..
+ffffff.
+ffffff.
+ffffff.
+ffffff.
+fffff..
+.......
+-
+fff....
+fffff..
+ffffff.
+fffffff
+fffffff
+ffffff.
+fffff..
+ccc....
+-
+fff....
+fffff..
+ffffff.
+fffffff
+fffffff
+ffffff.
+fffff..
+ccc....
+-
+fff....
+fffff..
+ffffff.
+fffffff
+fffffff
+ffffff.
+fffff..
+ccc....
+-
+fff....
+fffff..
+ffffff.
+fffffff
+fffffff
+ffffff.
+fffff..
+ccc....
+-
+fff....
+fffff..
+ffffff.
+fffffff
+fffffff
+ffffff.
+fffff..
+ccc....
+-
+.......
+fffff..
+ffffff.
+ffffff.
+ffffff.
+ffffff.
+fffff..
+.......
+` },
+  // gills: a comb of four 3-long filaments per side on a 7-high spine; the glowing tip of each filament is its own springy part
+  { part: 'gillR', mirror: 'gillL', x: 7, y: 8, z: 7, text: `
+rr
+r.
+rr
+r.
+rr
+r.
+rr
+-
+=
+` },
+  { part: 'gillTipR', mirror: 'gillTipL', x: 9, y: 8, z: 7, text: `
+G
+.
+G
+.
+G
+.
+G
+-
+=
+` },
+  { part: 'legFR', mirror: 'legFL', x: 3, y: 1, z: 4, text: `
+ff
+cc
+-
+=
+-
+=
+` },
+  { part: 'legBR', mirror: 'legBL', x: 3, y: 1, z: -1, text: `
+ff
+cc
+-
+=
+-
+=
+` },
+  { part: 'tail1', mirror: true, y: 5, z: -5, text: `
+f.
+ff
+ff
+c.
+-
+=
+` },
+  { part: 'tail2', mirror: true, y: 4, z: -7, text: `
+f.
+ff
+c.
+-
+=
+` },
+  // vertical paddle fin (2 wide, 7 tall, 3 deep): coral rim, fin-colour body, glowing emblem on both faces
+  { part: 'tail3', mirror: true, y: 8, z: -9, text: `
+.
+e
+e
+e
+e
+e
+.
+-
+r
+e
+e
+G
+e
+e
+r
+-
+.
+r
+r
+r
+r
+r
+.
+` },
+];
+
+const TD_FACE: FaceDef = {
+  on: 'head',
+  x: -7,
+  y: 8,
+  legend: { k: P(TD.INK), w: P(TD.WHITE, 1, -0.25), I: P(TD.IRIS, 1, -0.1), i: P(TD.IRIS2, 1, -0.2), b: P(TD.CORAL + 3), m: P(TD.MOUTH), r: P(TD.CORAL + 1), l: P(TD.MAIN + 1) },
+  frames: {
+    0: `
+..............
+...kk....kk...
+...wk....wk...
+...II....II...
+.bb.m....m.bb.
+.....mmmm.....
+..............`,
+    1: `
+..............
+..............
+...kk....kk...
+..............
+.==.=....=.==.
+.....====.....
+..............`,
+    2: `
+..............
+..............
+....k....k....
+...k.k..k.k...
+.==.mmmmmm.==.
+.....rrrr.....
+..............`,
+    3: `
+..............
+..............
+...ll....ll...
+...kk....kk...
+.==.=....=.==.
+......mm......
+..............`,
+    4: `
+..............
+...kk....kk...
+...wk....wk...
+...kk....kk...
+.==II....II==.
+......mm......
+......mm......`,
+  },
+};
 
 export const TIDLER: ModelDef = {
   name: 'tidler',
-  vs: 0.03,
+  vs: 0.05,
   parts: [
-    { name: 'body', parent: null, pivot: [0, 6.8, -3.5] },
-    { name: 'head', parent: 'body', pivot: [0, 7.5, 4.5] },
-    { name: 'eyes', parent: 'head', pivot: [0, 9.5, 13.5] },
-    { name: 'gillR', parent: 'head', pivot: [6.4, 10.6, 6] },
-    { name: 'gillL', parent: 'head', pivot: [-6.4, 10.6, 6] },
-    { name: 'legFR', parent: 'body', pivot: [5, 5.2, 4] },
-    { name: 'legFL', parent: 'body', pivot: [-5, 5.2, 4] },
-    { name: 'legBR', parent: 'body', pivot: [5, 5.2, -8.5] },
-    { name: 'legBL', parent: 'body', pivot: [-5, 5.2, -8.5] },
-    { name: 'tail1', parent: 'body', pivot: [0, 7, -11] },
-    { name: 'tail2', parent: 'tail1', pivot: [0, 7.6, -16.5] },
-    { name: 'tail3', parent: 'tail2', pivot: [0, 10.8, -20.2] },
+    { name: 'body', parent: null, pivot: [0, 4.5, 0] },
+    { name: 'head', parent: 'body', pivot: [0, 5, 4.5] },
+    { name: 'gillR', parent: 'head', pivot: [7, 5, 7] },
+    { name: 'gillL', parent: 'head', pivot: [-7, 5, 7] },
+    { name: 'gillTipR', parent: 'gillR', pivot: [8.5, 5, 7] },
+    { name: 'gillTipL', parent: 'gillL', pivot: [-8.5, 5, 7] },
+    { name: 'legFR', parent: 'body', pivot: [4, 2, 3] },
+    { name: 'legFL', parent: 'body', pivot: [-4, 2, 3] },
+    { name: 'legBR', parent: 'body', pivot: [4, 2, -3] },
+    { name: 'legBL', parent: 'body', pivot: [-4, 2, -3] },
+    { name: 'tail1', parent: 'body', pivot: [0, 3.5, -4] },
+    { name: 'tail2', parent: 'tail1', pivot: [0, 3.5, -6] },
+    { name: 'tail3', parent: 'tail2', pivot: [0, 3.5, -8] },
   ],
   palettes: [
-    ['#38C0D0', '#FFF1D8', '#FF8A7A', '#8CFFF0', '#1B2B45', '#E09A18', '#FFFFFF', '#3A1F4A', '#66D6E0', '#FFE2BC', '#2A2352'],
-    ['#FFB466', '#FFF4DA', '#FF6A7C', '#FFF09A', '#3A2118', '#C04AC0', '#FFFFFF', '#4A2020', '#FFCF92', '#FFE8C8', '#3A1F4A'],
-    ['#9082F5', '#F0EBFF', '#FF9AD2', '#6FF3FF', '#1E1A45', '#E8A020', '#FFFFFF', '#3F2060', '#B5A9FB', '#E2DCFF', '#2A2060'],
+    tidPal('#3EC4D2', '#FFF1D8', '#FF8A7A', '#7FD8E6', '#8CFFF0', '#1B2B45', '#E09A18', '#3A1F4A'),
+    tidPal('#FFB466', '#FFF4DA', '#FF6A7C', '#FFD09A', '#FFF09A', '#3A2118', '#C04AC0', '#4A2020'),
+    tidPal('#9C8CF7', '#F0EBFF', '#FF9AD2', '#BDB1FC', '#6FF3FF', '#1E1A45', '#E8A020', '#3F2060'),
   ],
-  build: buildTidler,
+  build: (s) => authorModel(s, TD_PARTS, TD_LEGEND, [TD_FACE]),
 };
 
 // ------------------------------------------------------------------------------------------------ Sprigfox
-const SF = { FUR: 0, CREAM: 1, DARK: 2, GLOW: 3, EYE: 4, IRIS: 5, WHITE: 6, NOSE: 7, LEAF: 8, LEAF2: 9, STEM: 10 };
+/** slots: 0-4 fur ramp . 5-9 cream ramp . 10-12 dark ramp (socks, ear tips) . 13-17 leaf ramp . 18 glow . 19 glow core . 20 ink . 21 white . 22 iris . 23 iris light . 24 nose */
+const SF = { FUR: 0, CREAM: 5, DARK: 10, LEAF: 13, GLOW: 18, CORE: 19, INK: 20, WHITE: 21, IRIS: 22, IRIS2: 23, NOSE: 24 };
 
-function buildSprigfox(s: Sculpt): void {
-  const { FUR, CREAM, DARK, GLOW, EYE, IRIS, WHITE, NOSE, LEAF, LEAF2, STEM } = SF;
-  s.ellipsoid('body', [0, 9.2, -1.0], [5.3, 5.2, 9.6], P(FUR), { n: 2.2 });
-  s.recolor(['body'], (c) => (c.ny < -0.3 || (c.nz > 0.3 && c.y < 11.5 && c.z > 3) ? P(CREAM) : null));
-
-  // head: round, with cream cheek ruffs and a soft rounded muzzle
-  s.ellipsoid('head', [0, 15.4, 7.8], [6.9, 5.6, 5.9], P(FUR), { n: 2.2 });
-  s.ellipsoid('head', [0, 12.6, 12.2], [3.5, 2.1, 3.2], P(CREAM), { n: 2.6 });
-  s.recolor(['head'], (c) => (c.nz > 0.3 && c.y < 13.6 && c.z > 6 ? P(CREAM) : null));
-
-  // ears: two clean cones, dark tip cap, ONE cream inner wedge on the front layer
-  const earP = (c: PaintCtx): Paint => (c.t > 0.8 ? P(DARK) : P(FUR));
-  for (const sx of [1, -1]) s.taper(sx > 0 ? 'earR' : 'earL', [sx * 4.2, 19.0, 6.4], [sx * 7.2, 30.6, 4.2], 3.3, 0.5, earP, { flat: 0.6 });
-
-  // ONE small forehead sprout
-  s.capsule('sprout', [0, 20.4, 9.6], [0, 22.0, 9.8], 0.95, 0.75, P(STEM));
-  const sproutP = (c: PaintCtx): Paint => (c.t > 0.7 ? P(GLOW, 1, 0.9) : P(LEAF2));
-  s.leaf('sprout', [0.3, 21.9, 9.8], [1.8, 24.4, 9.8], 1.15, [0, 0, 1], sproutP, 0.5);
-  s.leaf('sprout', [-0.3, 21.9, 9.8], [-1.8, 24.4, 9.8], 1.15, [0, 0, 1], sproutP, 0.5);
-
-  // legs (short, sturdy)
-  const sock = (c: PaintCtx): Paint => (c.y < 3.6 ? P(DARK) : P(FUR));
-  for (const sx of [1, -1]) {
-    const n = sx > 0 ? 'R' : 'L';
-    s.capsule(`legF${n}`, [sx * 3.3, 7.2, 5.2], [sx * 3.4, 1.4, 6.0], 2.0, 1.5, sock);
-    s.ellipsoid(`legF${n}`, [sx * 3.4, 0.9, 6.8], [1.8, 0.9, 2.3], P(DARK));
-    s.ellipsoid(`legB${n}`, [sx * 3.9, 7.0, -6.4], [2.7, 3.8, 3.8], P(FUR));
-    s.capsule(`legB${n}`, [sx * 3.7, 4.6, -6.8], [sx * 3.6, 1.4, -5.4], 1.7, 1.4, sock);
-    s.ellipsoid(`legB${n}`, [sx * 3.6, 0.9, -4.6], [1.7, 0.9, 2.4], P(DARK));
-  }
-
-  // tail: fluffy base + a three-tier leaf plume on a thin S-curved spine (tiers dark -> light, glowing tips)
-  s.capsule('tail1', [0, 10.5, -9.5], [0, 12.4, -13.6], 3.1, 3.5, P(FUR));
-  const T: V3 = [0, 13.2, -14.6];
-  const A: V3 = [0, 16.8, -19.6];
-  const Bp: V3 = [0, 22.0, -20.2];
-  const C: V3 = [0, 26.0, -17.0];
-  const D: V3 = [0, 27.8, -12.8];
-  s.capsule('tail2', T, A, 2.6, 2.0, (c) => (c.t < 0.55 ? P(FUR) : P(LEAF)));
-  s.capsule('tail2', A, Bp, 2.0, 1.8, P(LEAF));
-  s.capsule('tail2', Bp, C, 1.8, 1.5, P(LEAF));
-  s.capsule('tail2', C, D, 1.5, 1.1, P(LEAF));
-  const tier = (col: number) => (c: PaintCtx): Paint => (c.t > 0.74 ? P(GLOW, 1, 0.9) : P(col));
-  const th: V3 = [0, 0, 1];
-  for (const sx of [1, -1]) {
-    s.leaf('tail2', A, [sx * 5.8, 16.4, -23.6], 2.4, th, tier(STEM), 0.75);
-    s.leaf('tail2', Bp, [sx * 5.4, 23.0, -24.6], 2.2, th, tier(LEAF), 0.75);
-    s.leaf('tail2', C, [sx * 4.4, 27.6, -21.0], 1.8, th, tier(LEAF2), 0.75);
-  }
-  s.leaf('tail2', C, [0, 30.0, -14.2], 1.8, [0, 0, 1], tier(LEAF2), 0.75);
-
-  despeckle(s);
-
-  // face: shared eyes, small nose, cat 'w' mouth on the muzzle; glowing chest glyph
-  eyes(s, 'head', 2, 19, { line: EYE, iris: IRIS, white: WHITE, lift: 1.4, rows: [EYE_FOX, EYE_FOX] });
-  s.decal({ on: 'head', x: -1, y: 13, rows: ['NN'], legend: { N: P(EYE, 0.7) } });
-  mouth(s, 'head', OMEGA6, 11, P(EYE, 1.1));
+function foxPal(fur: string, cream: string, dark: string, leaf: string, glow: string, ink: string, iris: string): string[] {
+  return [...ramp5(fur), ...ramp5(cream), ...ramp3(dark), ...ramp5(leaf), glow, tint(glow, 0.2), ink, '#FFF8EC', iris, tint(iris, 0.2), tint(ink, -0.04)];
 }
+
+const SF_LEGEND: Legend = {
+  f: { ramp: F5(SF.FUR) },
+  c: { ramp: F5(SF.CREAM) },
+  d: { ramp: [SF.DARK, SF.DARK, SF.DARK + 1, SF.DARK + 2, SF.DARK + 2], dither: false },
+  l: { ramp: F5(SF.LEAF), dither: false },
+  s: P(SF.LEAF),
+  G: P(SF.GLOW, 1, 0.9),
+  g: P(SF.CORE, 1, 1),
+};
+
+const SF_PARTS: VoxPart[] = [
+  { part: 'body', mirror: true, y: 10, z: 5, text: `
+....
+fff.
+fff.
+ccc.
+ccc.
+ccc.
+....
+-
+ff..
+fff.
+ffff
+cccc
+cccc
+ccc.
+cc..
+-
+ff..
+fff.
+ffff
+cccc
+cccc
+ccc.
+cc..
+-
+ff..
+fff.
+ffff
+cccc
+cccc
+ccc.
+cc..
+-
+ff..
+fff.
+ffff
+ffff
+ffff
+ccc.
+cc..
+-
+ff..
+fff.
+ffff
+ffff
+ffff
+ccc.
+cc..
+-
+ff..
+fff.
+ffff
+ffff
+ffff
+ccc.
+cc..
+-
+ff..
+fff.
+ffff
+ffff
+ffff
+ccc.
+cc..
+-
+ff..
+fff.
+ffff
+ffff
+ffff
+ccc.
+cc..
+-
+ff..
+fff.
+ffff
+ffff
+ffff
+ccc.
+cc..
+-
+ff..
+fff.
+ffff
+ffff
+ffff
+ccc.
+cc..
+-
+....
+fff.
+fff.
+fff.
+fff.
+ccc.
+....
+` },
+  { part: 'head', mirror: true, y: 15, z: 10, text: `
+.....
+ffff.
+ffff.
+ffff.
+ffff.
+cccc.
+cccc.
+.....
+-
+fff..
+ffff.
+fffff
+fffff
+fffff
+ccccc
+cccc.
+ccc..
+-
+fff..
+ffff.
+fffff
+fffff
+fffff
+ccccc
+cccc.
+ccc..
+-
+fff..
+ffff.
+fffff
+fffff
+fffff
+fffff
+ffff.
+fff..
+-
+fff..
+ffff.
+fffff
+fffff
+fffff
+fffff
+ffff.
+fff..
+-
+fff..
+ffff.
+fffff
+fffff
+fffff
+fffff
+ffff.
+fff..
+-
+fff..
+ffff.
+fffff
+fffff
+fffff
+fffff
+ffff.
+fff..
+-
+.....
+ffff.
+ffff.
+ffff.
+ffff.
+ffff.
+ffff.
+.....
+` },
+  // soft muzzle (cream, rounded front) and cheek ruffs that sweep back
+  { part: 'head', mirror: true, y: 11, z: 13, text: `
+c.
+cc
+c.
+-
+cc
+cc
+cc
+-
+=
+` },
+  { part: 'head', mirror: true, x: 5, y: 11, z: 8, text: `
+c
+.
+-
+c
+c
+-
+.
+c
+` },
+  // ears: stair-step cones leaning out, cream inner column on the front slice, dark tip as its own springy part
+  { part: 'earR', mirror: 'earL', x: 2, y: 19, z: 6, text: `
+.ff
+.cf
+fcf
+fcf
+-
+.ff
+.ff
+fff
+fff
+` },
+  { part: 'earTipR', mirror: 'earTipL', x: 3, y: 21, z: 6, text: `
+.d
+dd
+-
+=
+` },
+  // forehead sprout: a flared leaf cup, glowing tips
+  { part: 'sprout', x: -3, y: 19, z: 9, text: `
+gl..lg
+.llll.
+..ll..
+..ss..
+-
+=
+` },
+  { part: 'legFR', mirror: 'legFL', x: 1, y: 3, z: 5, text: `
+..
+..
+dd
+dd
+-
+ff
+ff
+dd
+dd
+-
+=
+` },
+  { part: 'legBR', mirror: 'legBL', x: 2, y: 3, z: -2, text: `
+..
+..
+dd
+dd
+-
+ff
+ff
+dd
+dd
+-
+=
+` },
+  // tail: fluffy base + a two-tier leaf plume (S curve: back, up, forward) with a glowing tip
+  { part: 'tail1', x: -2, y: 9, z: -7, text: `
+.ff.
+ffff
+ffff
+.cc.
+-
+=
+-
+=
+` },
+  { part: 'tail2', mirror: true, y: 12, z: -10, text: `
+l..
+ll.
+lll
+ll.
+l..
+-
+=
+` },
+  { part: 'tail3', mirror: true, y: 18, z: -9, text: `
+g..
+l..
+ll.
+lll
+ll.
+l..
+-
+=
+` },
+];
+
+const SF_FACE: FaceDef = {
+  on: 'head',
+  x: -5,
+  y: 14,
+  legend: { k: P(SF.INK), w: P(SF.WHITE, 1, -0.25), I: P(SF.IRIS, 1, -0.1), i: P(SF.IRIS2, 1, -0.2), n: P(SF.INK), m: P(SF.NOSE), r: P(SF.DARK + 2), l: P(SF.FUR + 1) },
+  frames: {
+    0: `
+..kk..kk..
+..wk..wk..
+..II..II..
+....nn....
+...m..m...
+..........`,
+    1: `
+..........
+..kk..kk..
+..........
+....==....
+...=..=...
+..........`,
+    2: `
+..........
+...k...k..
+..k.k.k.k.
+....==....
+...mmmm...
+....rr....`,
+    3: `
+..ll..ll..
+..kk..kk..
+..........
+....==....
+...=..=...
+..........`,
+    4: `
+..........
+.kkk..kkk.
+.wkk..wkk.
+....==....
+...mmmm...
+....mm....`,
+  },
+};
 
 export const SPRIGFOX: ModelDef = {
   name: 'sprigfox',
-  vs: 0.03,
+  vs: 0.04,
   parts: [
-    { name: 'body', parent: null, pivot: [0, 9, -1] },
-    { name: 'head', parent: 'body', pivot: [0, 13.5, 5] },
-    { name: 'eyes', parent: 'head', pivot: [0, 17.5, 13] },
-    { name: 'earR', parent: 'head', pivot: [4.2, 19, 6.4] },
-    { name: 'earL', parent: 'head', pivot: [-4.2, 19, 6.4] },
-    { name: 'sprout', parent: 'head', pivot: [0, 20.4, 9.6] },
-    { name: 'legFR', parent: 'body', pivot: [3.3, 7.2, 5.2] },
-    { name: 'legFL', parent: 'body', pivot: [-3.3, 7.2, 5.2] },
-    { name: 'legBR', parent: 'body', pivot: [3.9, 8, -6.4] },
-    { name: 'legBL', parent: 'body', pivot: [-3.9, 8, -6.4] },
-    { name: 'tail1', parent: 'body', pivot: [0, 10.5, -9.5] },
-    { name: 'tail2', parent: 'tail1', pivot: [0, 13.2, -14.6] },
+    { name: 'body', parent: null, pivot: [0, 7, 0] },
+    { name: 'head', parent: 'body', pivot: [0, 10, 4] },
+    { name: 'earR', parent: 'head', pivot: [3.5, 16, 5.5] },
+    { name: 'earL', parent: 'head', pivot: [-3.5, 16, 5.5] },
+    { name: 'earTipR', parent: 'earR', pivot: [4, 20, 5.5] },
+    { name: 'earTipL', parent: 'earL', pivot: [-4, 20, 5.5] },
+    { name: 'sprout', parent: 'head', pivot: [0, 16, 8] },
+    { name: 'legFR', parent: 'body', pivot: [2, 4, 4] },
+    { name: 'legFL', parent: 'body', pivot: [-2, 4, 4] },
+    { name: 'legBR', parent: 'body', pivot: [3, 4, -4] },
+    { name: 'legBL', parent: 'body', pivot: [-3, 4, -4] },
+    { name: 'tail1', parent: 'body', pivot: [0, 7.5, -6] },
+    { name: 'tail2', parent: 'tail1', pivot: [0, 8, -10] },
+    { name: 'tail3', parent: 'tail2', pivot: [0, 13, -9.5] },
   ],
   palettes: [
-    ['#F58E3C', '#FFCB8E', '#5A3322', '#C6FF6A', '#4A2A1C', '#3FAE5A', '#FFFFFF', '#8A2F3A', '#3CC46C', '#9BEB74', '#2F8F55'],
-    ['#A6BEEE', '#EEF3FF', '#3A4A78', '#7DFFF0', '#2A3252', '#D2457F', '#FFFFFF', '#7A2F4A', '#EC6E92', '#FFB8C8', '#B84A66'],
-    ['#F7CC50', '#FFE6A0', '#7A4A1F', '#FF9BE0', '#4A2A1C', '#1FA39A', '#FFFFFF', '#8A3A2A', '#24BCB4', '#86EFD6', '#1A7F78'],
+    foxPal('#F58E3C', '#FFE0B0', '#5A3322', '#3CC46C', '#C6FF6A', '#3A2218', '#3FAE5A'),
+    foxPal('#A6BEEE', '#EEF3FF', '#3A4A78', '#EC6E92', '#7DFFF0', '#2A3252', '#D2457F'),
+    foxPal('#F7CC50', '#FFE9A8', '#7A4A1F', '#24BCB4', '#FF9BE0', '#3A2A1C', '#1FA39A'),
   ],
-  build: buildSprigfox,
+  build: (s) => authorModel(s, SF_PARTS, SF_LEGEND, [SF_FACE]),
 };
 
 // ------------------------------------------------------------------------------------------------ Explorer avatar
+/** base slots (customisable) 0-13, derived tones 14-31 (see avatarPalette) */
 export const AV = { SKIN: 0, HAIR: 1, SHIRT: 2, PANTS: 3, BOOTS: 4, PACK: 5, EYE: 6, WHITE: 7, IRIS: 8, BLUSH: 9, MOUTH: 10, TRIM: 11, GLOW: 12, PACK2: 13 };
+export const AV_BASE = ['#FFD3B3', '#D08446', '#F0594E', '#3A55B0', '#7A4A2B', '#2BA6B4', '#33201A', '#FFFFFF', '#B07A34', '#FF9A9A', '#A0443A', '#FFF0D6', '#7DF4FF', '#E9C46A'];
 
-function buildAvatar(s: Sculpt): void {
-  const { SKIN, HAIR, SHIRT, PANTS, BOOTS, PACK, EYE, WHITE, IRIS, BLUSH, MOUTH, TRIM, GLOW, PACK2 } = AV;
-  for (const sx of [1, -1]) {
-    const part = sx > 0 ? 'legR' : 'legL';
-    s.box(part, [sx * 2.2, 3.8, 0], [3.8, 7.6, 4.0], (c) => (c.y < 2.6 ? P(BOOTS) : P(PANTS)), { round: 0.9 });
-    s.ellipsoid(part, [sx * 2.2, 1.4, 1.1], [2.2, 1.5, 3.1], P(BOOTS));
-  }
-  s.box('body', [0, 11.2, 0], [9.0, 7.6, 5.6], P(SHIRT), { round: 1.6 });
-  s.recolor(['body'], (c) => (c.y < 8.6 || c.y > 14.2 ? P(TRIM) : null));
-  for (const sx of [1, -1]) s.box('body', [sx * 2.8, 11.6, 2.8], [1.6, 6.4, 0.8], P(PACK));
-  for (const sx of [1, -1]) {
-    const part = sx > 0 ? 'armR' : 'armL';
-    s.capsule(part, [sx * 5.5, 14.0, 0], [sx * 6.0, 8.8, 0.6], 2.0, 1.8, (c) => (c.y < 10.2 ? P(TRIM) : P(SHIRT)));
-    s.ellipsoid(part, [sx * 6.1, 7.6, 0.7], [1.9, 1.9, 1.9], P(SKIN));
-  }
-  s.ellipsoid('head', [0, 20.8, 0.2], [7.3, 6.5, 6.7], P(SKIN), { n: 2.5 });
-  for (const sx of [1, -1]) s.ellipsoid('head', [sx * 7.2, 20.4, 0], [1.4, 2.2, 1.8], P(SKIN));
-  // squarer, lighter jaw so the chin row is clean
-  s.box('head', [0, 17.5, 0.3], [9.6, 5.2, 8.8], P(SKIN), { round: 1.8 });
-  // hair: ONE solid shell (no holes), 3 value bands: crown highlight, base, darker lower fringe; a one-voxel parting
-  s.box(
-    'head',
-    [0, 22.4, -0.8],
-    [15.8, 13.6, 15.4],
-    (c) => {
-      if (c.nz > 0.3 && c.y < 24.4) return null; // face opening under the fringe
-      const low = c.nz < -0.15 ? 17.4 : 18.8;
-      if (c.y < low) return null;
-      if (c.ny > 0.62) return c.x > 0 && c.x < 1 && c.nz < 0.2 ? P(HAIR, 0.88) : P(HAIR, 1.24);
-      if (c.y < low + 2.2) return P(HAIR, 0.84);
-      return P(HAIR);
-    },
-    { round: 4.2 },
-  );
-  // a small top-back bun (springs in the animator)
-  s.ellipsoid('hair', [0, 29.0, -4.4], [3.4, 2.7, 3.2], (c) => P(HAIR, c.ny > 0.4 ? 1.22 : 1));
-  s.box('pack', [0, 11.4, -5.6], [8.0, 9.2, 4.2], (c) => (c.y > 13.4 ? P(PACK2) : P(PACK)), { round: 1.1 });
-
-  despeckle(s);
-
-  s.decal({ on: 'body', x: -1, y: 12, rows: ['GG', 'GG'], legend: { G: P(GLOW, 1, 0.9) } });
-  s.decal({ on: 'pack', dir: '-z', x: 0, y: 11, rows: ['GG'], legend: { G: P(GLOW, 1, 0.9) } });
-  // face: side locks frame the forehead, shared eyes, a real 6-voxel smile, 2-voxel blush per cheek
-  eyes(s, 'head', 1, 23, { line: EYE, iris: IRIS, white: WHITE, lift: 1.5, pupil: EYE, lid: P(SKIN, 0.86), rows: [AV_EYE, AV_EYE] });
-  mouth(s, 'head', SMILE6, 17, P(SKIN, 0.52));
-  s.decal({ on: 'head', x: 4, y: 18, rows: ['BB'], legend: { B: P(BLUSH, 1.02) } });
-  s.decal({ on: 'head', x: -6, y: 18, rows: ['BB'], legend: { B: P(BLUSH, 1.02) } });
+/** full 32-slot palette from the 14 customisable base colours (tone ramps are derived, hue-shifted) */
+export function avatarPalette(b: string[]): string[] {
+  const sk = ramp5(b[AV.SKIN]!);
+  const ha = ramp5(b[AV.HAIR]!);
+  const sh = ramp5(b[AV.SHIRT]!);
+  const pa = ramp5(b[AV.PANTS]!);
+  const bo = ramp5(b[AV.BOOTS]!);
+  const pk = ramp5(b[AV.PACK]!);
+  const out = [...b];
+  out[14] = sk[1]!;
+  out[15] = sk[3]!;
+  // hair: lifted deep/shade tones (the back of the head is what you look at; never a dark slab)
+  out[16] = tint(ha[0]!, 0.17);
+  out[17] = tint(ha[1]!, 0.09);
+  out[18] = ha[3]!;
+  out[19] = tint(ha[3]!, 0.06); // crown/top lip: warm gold, not the near-white peach of ramp5's top tone
+  out[20] = sh[0]!;
+  out[21] = sh[1]!;
+  out[22] = sh[3]!;
+  out[23] = sh[4]!;
+  out[24] = pa[1]!;
+  out[25] = pa[3]!;
+  out[26] = bo[1]!;
+  out[27] = bo[3]!;
+  out[28] = tint(pk[1]!, 0.05);
+  out[29] = pk[3]!;
+  out[30] = tint(b[AV.GLOW]!, 0.2);
+  out[31] = tint(b[AV.IRIS]!, 0.2);
+  return out;
 }
+
+const AV_LEGEND: Legend = {
+  s: { ramp: [14, 14, AV.SKIN, 15, 15], dither: false },
+  h: { ramp: [16, 17, AV.HAIR, 18, 19], strands: true },
+  t: { ramp: [20, 21, AV.SHIRT, 22, 23], dither: false },
+  p: { ramp: [24, 24, AV.PANTS, 25, 25], dither: false },
+  b: { ramp: [26, 26, AV.BOOTS, 27, 27], dither: false },
+  k: { ramp: [28, 28, AV.PACK, 29, 29], dither: false },
+  H: P(19),
+  D: P(17),
+  K: P(AV.PACK2),
+  m: P(AV.TRIM),
+  G: P(AV.GLOW, 1, 0.9),
+};
+
+const AV_PARTS: VoxPart[] = [
+  { part: 'legR', mirror: 'legL', x: 1, y: 4, z: 2, text: `
+...
+...
+...
+bbb
+bbb
+-
+ppp
+ppp
+ppp
+bbb
+bbb
+-
+=
+-
+=
+` },
+  { part: 'body', mirror: true, y: 10, z: 2, text: `
+mmm.
+tttt
+Gttt
+Gttt
+tttt
+mmm.
+-
+mmm.
+tttt
+tttt
+tttt
+tttt
+mmm.
+-
+mmm.
+tttt
+tttt
+tttt
+tttt
+mmm.
+-
+mmm.
+tttt
+tttt
+tttt
+tttt
+mmm.
+-
+mmm.
+tttt
+tttt
+tttt
+tttt
+mmm.
+-
+mmm.
+tttt
+tttt
+tttt
+tttt
+mmm.
+` },
+  { part: 'armR', mirror: 'armL', x: 4, y: 10, z: 1, text: `
+tt
+tt
+tt
+mm
+ss
+ss
+-
+=
+` },
+  { part: 'head', mirror: true, y: 20, z: 4, text: `
+.....
+ssss.
+ssss.
+ssss.
+ssss.
+ssss.
+ssss.
+ssss.
+ssss.
+.....
+-
+sss..
+ssss.
+sssss
+sssss
+sssss
+sssss
+sssss
+sssss
+ssss.
+sss..
+-
+sss..
+ssss.
+sssss
+sssss
+sssss
+sssss
+sssss
+sssss
+ssss.
+sss..
+-
+sss..
+ssss.
+sssss
+sssss
+sssss
+sssss
+sssss
+sssss
+ssss.
+sss..
+-
+sss..
+ssss.
+sssss
+sssss
+sssss
+sssss
+sssss
+sssss
+ssss.
+sss..
+-
+sss..
+ssss.
+sssss
+sssss
+sssss
+sssss
+sssss
+sssss
+ssss.
+sss..
+-
+sss..
+ssss.
+sssss
+sssss
+sssss
+sssss
+sssss
+sssss
+ssss.
+sss..
+-
+sss..
+ssss.
+sssss
+sssss
+sssss
+sssss
+sssss
+sssss
+ssss.
+sss..
+-
+sss..
+ssss.
+sssss
+sssss
+sssss
+sssss
+sssss
+sssss
+ssss.
+sss..
+-
+.....
+ssss.
+ssss.
+ssss.
+ssss.
+ssss.
+ssss.
+ssss.
+ssss.
+.....
+` },
+  { part: 'head', mirror: true, y: 22, z: 5, text: `
+......
+......
+......
+......
+......
+......
+......
+......
+......
+......
+-
+......
+hhhhh.
+hhhhh.
+hhhhh.
+...hh.
+......
+......
+......
+......
+......
+-
+hhhh..
+hhhhh.
+hhhhhh
+hhhhhh
+...hhh
+......
+......
+......
+......
+......
+-
+hhhh..
+hhhhh.
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+....hh
+....hh
+......
+......
+-
+hhhh..
+hhhhh.
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+....hh
+....hh
+......
+......
+-
+hhhh..
+hhhhh.
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+....hh
+....hh
+......
+......
+-
+hhhh..
+hhhhh.
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+....hh
+....hh
+......
+......
+-
+hhhh..
+hhhhh.
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhh.
+hhhh..
+-
+hhhh..
+hhhhh.
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhh.
+hhhh..
+-
+hhhh..
+hhhhh.
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhh.
+hhhh..
+-
+hhhh..
+hhhhh.
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhhh
+hhhhh.
+hhhh..
+-
+......
+DhhHh.
+DhHhh.
+hHHhh.
+hhhhh.
+hDhhH.
+hhDhH.
+hhhDh.
+hhhhD.
+hhhh..
+` },
+  { part: 'hair', mirror: true, x: 0, y: 19, z: -7, text: `
+tt
+hh
+hh
+hh
+hh
+h.
+-
+..
+hh
+hh
+hh
+h.
+..
+` },
+  { part: 'pack', mirror: true, x: 0, y: 9, z: -6, text: `
+kkkk
+kkkk
+kkkk
+kkkk
+kkkk
+.kkk
+-
+KKKK
+KKKK
+kkkk
+kkkk
+kkkk
+.kkk
+-
+KKK.
+mKKK
+kkkk
+mmmm
+Gkkk
+kkk.
+` },
+];
+
+const AV_FACE: FaceDef = {
+  on: 'head',
+  x: -5,
+  y: 17,
+  legend: { k: P(AV.EYE), w: P(AV.WHITE, 1, -0.25), I: P(AV.IRIS, 1, -0.1), i: P(31, 1, -0.2), b: P(AV.BLUSH, 1.02), m: P(14, 0.74), r: P(AV.BLUSH), l: P(14) },
+  frames: {
+    0: `
+..kk..kk..
+..wk..wk..
+..II..II..
+.b......b.
+...m..m...
+....mm....`,
+    1: `
+..........
+..kk..kk..
+..........
+.=......=.
+...=..=...
+....==....`,
+    2: `
+..........
+...k...k..
+..k.k.k.k.
+.=......=.
+...mmmm...
+....rr....`,
+    3: `
+..ll..ll..
+..kk..kk..
+..........
+.=......=.
+...=..=...
+....==....`,
+    4: `
+..kk..kk..
+..wk..wk..
+..II..II..
+.=......=.
+....mm....
+....mm....`,
+  },
+};
 
 export const AVATAR: ModelDef = {
   name: 'avatar',
-  vs: 0.04,
+  vs: 0.05,
   parts: [
-    { name: 'body', parent: null, pivot: [0, 11.2, 0] },
-    { name: 'head', parent: 'body', pivot: [0, 15.2, 0] },
-    { name: 'eyes', parent: 'head', pivot: [0, 21.5, 6] },
-    { name: 'hair', parent: 'head', pivot: [0, 22.5, -6] },
-    { name: 'armR', parent: 'body', pivot: [5.6, 14, 0] },
-    { name: 'armL', parent: 'body', pivot: [-5.6, 14, 0] },
-    { name: 'legR', parent: 'body', pivot: [2.2, 7.8, 0] },
-    { name: 'legL', parent: 'body', pivot: [-2.2, 7.8, 0] },
-    { name: 'pack', parent: 'body', pivot: [0, 14.5, -4] },
+    { name: 'body', parent: null, pivot: [0, 8, 0] },
+    { name: 'head', parent: 'body', pivot: [0, 11, 0] },
+    { name: 'hair', parent: 'head', pivot: [0, 20, -6] },
+    { name: 'armR', parent: 'body', pivot: [5, 10.5, 0] },
+    { name: 'armL', parent: 'body', pivot: [-5, 10.5, 0] },
+    { name: 'legR', parent: 'body', pivot: [2.5, 5, 0] },
+    { name: 'legL', parent: 'body', pivot: [-2.5, 5, 0] },
+    { name: 'pack', parent: 'body', pivot: [0, 9, -4] },
   ],
-  palettes: [['#FFD3B3', '#A8693A', '#F0594E', '#3A55B0', '#7A4A2B', '#2BA6B4', '#33201A', '#FFFFFF', '#B07A34', '#FF9A9A', '#A0443A', '#FFF0D6', '#7DF4FF', '#E9C46A']],
-  build: buildAvatar,
+  palettes: [avatarPalette(AV_BASE)],
+  build: (s) =>
+    authorModel(s, AV_PARTS, AV_LEGEND, [AV_FACE], (m) =>
+      // self-light floor (constant, scaled up at night by the actor shader): the player is seen from behind, often against the
+      // sun, and a pure shadow-lit back reads as a dark slab. The face cells are stamped afterwards and keep their own paint.
+      m.recolor(['head', 'hair', 'pack', 'body', 'armR', 'armL', 'legR', 'legL'], (c) => (c.v.e === 0 ? { s: c.v.s, h: c.v.h, e: -0.2 } : null)),
+    ),
 };
 
 export const SPECIES_DEFS: ModelDef[] = [PUFFBUN, TIDLER, SPRIGFOX];

@@ -80,6 +80,7 @@ export class ModelInstances {
   count = 0;
   private readonly av: Float32Array[] = [];
   private readonly ag: Float32Array[] = [];
+  private readonly af: Float32Array[] = [];
   private readonly attrs: InstancedBufferAttribute[] = [];
 
   constructor(
@@ -95,13 +96,17 @@ export class ModelInstances {
       const geo = bp.geo;
       const a1 = new InstancedBufferAttribute(new Float32Array(capacity), 1);
       const a2 = new InstancedBufferAttribute(new Float32Array(capacity), 1);
+      const a3 = new InstancedBufferAttribute(new Float32Array(capacity), 1);
       a1.setUsage(DynamicDrawUsage);
       a2.setUsage(DynamicDrawUsage);
+      a3.setUsage(DynamicDrawUsage);
       geo.setAttribute('aInstVar', a1);
       geo.setAttribute('aInstGlow', a2);
+      geo.setAttribute('aInstFace', a3);
       this.av.push(a1.array as Float32Array);
       this.ag.push(a2.array as Float32Array);
-      this.attrs.push(a1, a2);
+      this.af.push(a3.array as Float32Array);
+      this.attrs.push(a1, a2, a3);
       const im = new InstancedMesh(geo, material, capacity);
       im.instanceMatrix.setUsage(DynamicDrawUsage);
       im.count = 0;
@@ -120,10 +125,12 @@ export class ModelInstances {
   alloc(): number {
     return this.count < this.capacity ? this.count++ : -1;
   }
-  setAttr(i: number, variant: number, glow: number): void {
+  /** face = expression frame (0 neutral, 1 blink, 2 happy, 3 sleep, 4 surprised) */
+  setAttr(i: number, variant: number, glow: number, face = 0): void {
     for (let p = 0; p < this.av.length; p++) {
       this.av[p]![i] = variant;
       this.ag[p]![i] = glow;
+      this.af[p]![i] = face;
     }
   }
   end(): void {

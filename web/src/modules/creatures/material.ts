@@ -8,7 +8,7 @@ import { Color, Vector3, type MeshToonMaterial } from 'three';
 import type { Ctx } from '../../engine/types';
 
 const SIL = typeof location !== 'undefined' && new URLSearchParams(location.search).has('sil');
-export const SLOTS = 16;
+export const SLOTS = 32;
 export const VARIANTS = 3;
 
 const VERT_PARS = /* glsl */ `
@@ -17,6 +17,8 @@ attribute vec4 aVox;
 attribute float aFace;
 attribute float aInstVar;
 attribute float aInstGlow;
+attribute float aFrame;
+attribute float aInstFace;
 varying vec2 vCrUv;
 varying vec4 vCrVox;
 varying vec3 vCrT;
@@ -34,6 +36,8 @@ const VERT_MAIN = /* glsl */ `
   vCrVox = aVox;
   vCrVar = aInstVar;
   vCrGlow = aInstGlow;
+  // expression frames: quads tagged with a frame mask are only drawn while this instance shows one of those frames
+  if ( aFrame > 0.5 && mod( floor( aFrame / exp2( aInstFace ) + 0.001 ), 2.0 ) < 0.5 ) gl_Position = vec4( 2.0, 2.0, 2.0, 1.0 );
   int crF = int( aFace + 0.5 );
   vec3 crTq = crT[ crF ];
   vec3 crBq = crB[ crF ];
@@ -152,7 +156,7 @@ export function makeActorMaterial(ctx: Ctx, palettes: string[][], name: string):
     if (e > 0) fs = fs.slice(0, e) + '  if ( uCrSil > 0.5 ) gl_FragColor = vec4( 0.0, 0.0, 0.0, 1.0 );\n}' + fs.slice(e + 1);
     shader.fragmentShader = fs;
   };
-  material.customProgramCacheKey = () => 'gw-voxactor-3';
+  material.customProgramCacheKey = () => 'gw-voxactor-4';
   void fxVec;
   return { material, pal, fx, setPalette };
 }

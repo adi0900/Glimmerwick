@@ -45,8 +45,11 @@ export interface Vox {
   s: number;
   h: number;
   e: number;
+  /** expression frames: frame index -> alternate paint (frame 0 / missing = the voxel's own paint) */
+  alt?: Paint[];
 }
 
+export const FRAMES = 6;
 export const P = (s: number, h = 1, e = 0): Paint => ({ s, h, e });
 
 const OFF = 400;
@@ -148,6 +151,13 @@ export class Sculpt {
 
   get(x: number, y: number, z: number): Vox | undefined {
     return this.vox.get(K(x, y, z));
+  }
+
+  /** give a surface cell an alternate colour for expression frame `frame` (same geometry; the renderer picks the frame) */
+  setFrame(x: number, y: number, z: number, frame: number, paint: Paint): void {
+    const v = this.vox.get(K(x, y, z));
+    if (!v) return;
+    (v.alt ??= [])[frame] = paint;
   }
 
   /** place one cell (integer coordinates) */
@@ -462,7 +472,7 @@ export interface BakedModel {
 /** one quad per visible voxel face; geometry is in metres relative to each part's pivot (voxel units * vs) */
 export function bake(sc: Sculpt, pivots: V3[], vs: number): BakedModel {
   const n = sc.names.length;
-  const acc = Array.from({ length: n }, () => ({ pos: [] as number[], nor: [] as number[], uv: [] as number[], vox: [] as number[], face: [] as number[], idx: [] as number[], voxels: 0, faces: 0 }));
+  const acc = Array.from({ length: n }, () => ({ pos: [] as number[], nor: [] as number[], uv: [] as number[], vox: [] as number[], face: [] as number[], frm: [] as number[], idx: [] as number[], voxels: 0, faces: 0 }));
   const solid = (x: number, y: number, z: number): number => (sc.vox.has(K(x, y, z)) ? 1 : 0);
   const B = sc.bounds();
   for (const [k, v] of sc.vox) {
@@ -472,6 +482,18 @@ export function bake(sc: Sculpt, pivots: V3[], vs: number): BakedModel {
     const a = acc[v.part]!;
     const pv = pivots[v.part]!;
     a.voxels++;
+    // expression frames: group the frames by identical paint; each group emits the voxel's faces once, tagged with its frame mask
+    const groups: { mask: number; s: number; h: number; e: number }[] = [];
+    if (v.alt) {
+      for (let fr = 0; fr < FRAMES; fr++) {
+        const p = fr === 0 ? v : (v.alt[fr] ? { s: v.alt[fr]!.s, h: v.alt[fr]!.h ?? 1, e: v.alt[fr]!.e ?? 0 } : v);
+        const g = groups.find((q) => q.s === p.s && q.h === p.h && q.e === p.e);
+        if (g) g.mask |= 1 << fr;
+        else groups.push({ mask: 1 << fr, s: p.s, h: p.h, e: p.e });
+      }
+      if (groups.length === 1) groups[0]!.mask = 0;
+    } else groups.push({ mask: 0, s: v.s, h: v.h, e: v.e });
+    for (const grp of groups)
     for (let f = 0; f < 6; f++) {
       const N = DIRS[f]!;
       const nb = sc.vox.get(K(x + N[0], y + N[1], z + N[2]));
@@ -502,8 +524,9 @@ export function bake(sc: Sculpt, pivots: V3[], vs: number): BakedModel {
         a.pos.push((px - pv[0]) * vs, (py - pv[1]) * vs, (pz - pv[2]) * vs);
         a.nor.push(N[0], N[1], N[2]);
         a.uv.push(u, w);
-        a.vox.push(v.s, v.h, av / 3, v.e);
+        a.vox.push(grp.s, grp.h, av / 3, grp.e);
         a.face.push(f);
+        a.frm.push(grp.mask);
       }
       if (ao[0]! + ao[2]! > ao[1]! + ao[3]!) a.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
       else a.idx.push(base + 1, base + 2, base + 3, base + 1, base + 3, base);
@@ -521,6 +544,7 @@ export function bake(sc: Sculpt, pivots: V3[], vs: number): BakedModel {
     geo.setAttribute('aUv', new Float32BufferAttribute(a.uv, 2));
     geo.setAttribute('aVox', new Float32BufferAttribute(a.vox, 4));
     geo.setAttribute('aFace', new Float32BufferAttribute(a.face, 1));
+    geo.setAttribute('aFrame', new Float32BufferAttribute(a.frm, 1));
     geo.setIndex(a.pos.length / 3 > 65535 ? new Uint32BufferAttribute(a.idx, 1) : new Uint16BufferAttribute(a.idx, 1));
     geo.computeBoundingSphere();
     parts.push({ name: sc.names[i]!, geo, voxels: a.voxels, faces: a.faces });

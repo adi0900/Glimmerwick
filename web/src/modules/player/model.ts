@@ -11,7 +11,7 @@ import { buildModel, composeRig, ModelInstances, newPose, PS, resetPose, type Mo
 import { makeActorMaterial, type ActorMaterial } from '../creatures/material';
 import { fxFor } from '../creatures/fx';
 import { RigState } from '../creatures/render';
-import { AV, AVATAR } from '../creatures/species';
+import { AV, AV_BASE, AVATAR, avatarPalette } from '../creatures/species';
 
 export interface AvatarColors {
   skin?: string;
@@ -46,6 +46,7 @@ export class VoxelAvatar {
   private readonly pose: Float32Array;
   private readonly R = new RigState(7);
   private readonly hex: string[];
+  private face = 0;
   private t = 0;
   private ph = 0;
   private lean = 0;
@@ -64,8 +65,14 @@ export class VoxelAvatar {
   ) {
     this.group.name = `${name}.avatar`;
     this.model = buildModel(AVATAR);
-    this.hex = [...AVATAR.palettes[0]!];
-    this.mat = makeActorMaterial(ctx, [this.hex], `${name}.avatar`);
+    this.hex = [...AV_BASE];
+    this.mat = makeActorMaterial(ctx, [avatarPalette(this.hex)], `${name}.avatar`);
+    // the player is viewed from behind ~90% of the time (often against the sun): keep the shaded side readable, never a dark slab
+    const gw = (this.mat.material.userData as { gw?: { uniforms?: Record<string, { value: unknown }> } }).gw;
+    const sh = gw?.uniforms?.uGwShade;
+    if (sh) sh.value = 0.82;
+    const st = gw?.uniforms?.uGwShadeTint?.value as { set?: (c: string) => void } | undefined;
+    st?.set?.('#C2B0EC');
     this.inst = new ModelInstances(this.model, this.mat.material, 1, this.group, ctx.mats, `${name}.avatar`);
     this.pose = newPose(this.model);
     this.stats = { voxels: this.model.baked.voxels, faces: this.model.baked.faces, parts: this.model.n };
@@ -85,11 +92,15 @@ export class VoxelAvatar {
     set(AV.PACK2, c.pack2);
     set(AV.IRIS, c.eyes);
     set(AV.GLOW, c.glow);
-    this.mat.setPalette(0, this.hex);
+    this.mat.setPalette(0, avatarPalette(this.hex));
   }
 
   /** drive from the interpolated `player` channel mirror */
   update(p: PlayerState, dt: number, _sea?: number): void {
+    // avatar self-light floor: strong by day (backs sit in shadow against the sun), eased off at night (the actor shader already
+    // multiplies emissive by 1 + 4.2 * night)
+    const night = Math.max(0, Math.min(1, Number((this.ctx.uniforms.uNight as { value: number }).value) || 0));
+    this.mat.fx.value.w = 1 + (0.2 - 1) * night;
     this.group.visible = p.valid;
     if (!p.valid) return;
     this.draw(p.pos.x, p.pos.y, p.pos.z, p.yaw, p.vel.x, p.vel.y, p.vel.z, p.animState, p.animT, p.grounded, p.waterDepth, dt);
@@ -112,7 +123,6 @@ export class VoxelAvatar {
     const sw = Math.sin(this.ph);
     const body = I.body!,
       head = I.head!,
-      eyes = I.eyes!,
       hair = I.hair!,
       armR = I.armR!,
       armL = I.armL!,
@@ -182,10 +192,9 @@ export class VoxelAvatar {
     pose[hair * PS + RZ] = R.sp[1]!.step(0.05 * Math.sin(t * 1.3) + (speed > 0.4 ? 0.12 * sw : 0), 90, 5, dt);
     pose[pack * PS + RX] = R.sp[2]!.step(-0.03 + this.lean * 0.25 + (grounded ? 0 : clamp(this.vyS * 0.02, -0.2, 0.2)), 130, 7, dt);
     // face
+    // authored face frames: 0 open, 1 blink (see voxdata FACE_FRAMES)
     const closed = R.blink(t, dt, false);
-    const k = Math.max(0.1, 1 - 0.9 * closed);
-    pose[eyes * PS + SYI] = k;
-    pose[eyes * PS + SXI] = 1 + (1 - k) * 0.1;
+    this.face = closed > 0.5 ? 1 : 0;
     // dust: landing puff (scaled by the fall speed) + a pair of puffs per sprint step
     if (dt > 0) {
       const fx = fxFor(this.ctx);
@@ -210,7 +219,7 @@ export class VoxelAvatar {
     this.inst.begin();
     const i = this.inst.alloc();
     composeRig(M, _root, pose, this.inst, i);
-    this.inst.setAttr(i, 0, 0.9 + 0.1 * Math.sin(t * 2.2));
+    this.inst.setAttr(i, 0, 0.9 + 0.1 * Math.sin(t * 2.2), this.face);
     this.inst.end();
   }
 
